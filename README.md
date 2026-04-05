@@ -11,8 +11,8 @@ Maya 向け QC ツール群の配布用リポジトリ。
 
 | ツール | 説明 |
 |---|---|
-| uv_qc_tools | UV チェックツール |
-| model_qc_tools | モデルチェックツール |
-| scene_cleanup_tools | シーン整理ツール |
 | qc_hub | QC ランチャー |
 | qc_tools_plugin | Maya メニュープラグイン |
+| model_qc_tools | モデルチェックツール |
+| uv_qc_tools | UV チェックツール |
+| scene_cleanup_tools | シーン整理ツール |
