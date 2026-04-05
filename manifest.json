@@ -1,1 +1,8 @@
-{}
+{
+  "qc_tools_plugin": {
+    "version": "1.0.0",
+    "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/qc_tools_plugin/qc_tools_plugin.py",
+    "sha256": "af1b0946d8d2f28b30f2b6a0529d9464b81a9a039ee4d0926c6bb32a51bc10ea",
+    "released_at": "2026-04-05T16:21:53Z"
+  }
+}
