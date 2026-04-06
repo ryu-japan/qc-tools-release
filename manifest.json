@@ -22,5 +22,11 @@
     "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/uv_qc_tools/uv_qc_tools.py",
     "sha256": "c0be85293c99689be64bcf1c896a1aa7a4cc9cac91108a0af643e9d420a56f97",
     "released_at": "2026-04-06T05:37:38Z"
+  },
+  "scene_cleanup_tools": {
+    "version": "0.16.2",
+    "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/scene_cleanup_tools/scene_cleanup_tools.py",
+    "sha256": "2786757903ac223009bfc64d03effa88fa7b1b662bb21f1c313420526e11d619",
+    "released_at": "2026-04-06T05:37:40Z"
   }
 }
