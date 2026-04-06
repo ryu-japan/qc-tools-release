@@ -25,7 +25,7 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.4.0"
+__VERSION__ = "0.5.0"
 __RELEASE_DATE__ = "2026-04-06"
 
 WINDOW_TITLE = "QC Hub"
@@ -34,7 +34,7 @@ WINDOW_OBJECT_NAME = "qcHubWindow"
 
 # --- Tool definitions ---------------------------------------------------
 # Each entry is a dict with keys: module, label_key, enabled,
-#   version_attr, window_names.
+#   version_attr, window_names, show_button (optional, default True).
 # To add a new tool, append one dict here.
 _TOOLS = [
     {"module": "model_qc_tools", "label_key": "tool_model_qc",
@@ -48,6 +48,9 @@ _TOOLS = [
     {"module": "scene_cleanup_tools", "label_key": "tool_scene_cleanup",
      "enabled": True, "version_attr": "__VERSION__",
      "window_names": ["sceneCleanupToolsWindow", "sceneCleanupResultsWindow", "sceneCleanupHelpDialog"]},
+    {"module": "qc_hub", "label_key": "tool_qc_hub",
+     "enabled": True, "version_attr": "__VERSION__",
+     "window_names": ["qcHubWindow"], "show_button": False},
 ]
 # --- [010] strings ---------------------------------------------------------
 
@@ -506,12 +509,11 @@ class UpdateDialog(QtWidgets.QDialog):
 
         if hub_updated and self._parent_hub is not None:
             self.close()
-            if "qc_hub" in sys.modules:
-                try:
-                    _reload(sys.modules["qc_hub"])
-                    sys.modules["qc_hub"].launch()
-                except Exception:
-                    pass
+            cmds.evalDeferred(
+                "import sys; "
+                "m = sys.modules.get('qc_hub') or __import__('qc_hub'); "
+                "getattr(__import__('importlib'), 'reload', reload)(m); "
+                "m.launch()")
 
 
 class QCHubUI(QtWidgets.QWidget):
@@ -556,6 +558,8 @@ class QCHubUI(QtWidgets.QWidget):
         grp_lay.setContentsMargins(4, 4, 4, 4)
 
         for tool in _TOOLS:
+            if not tool.get("show_button", True):
+                continue
             btn = QtWidgets.QPushButton()
             btn.setEnabled(tool["enabled"])
             if not tool["enabled"]:
