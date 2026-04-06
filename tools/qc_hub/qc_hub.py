@@ -25,7 +25,7 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.3.3"
+__VERSION__ = "0.4.0"
 __RELEASE_DATE__ = "2026-04-06"
 
 WINDOW_TITLE = "QC Hub"
@@ -56,11 +56,26 @@ _TR = {
     "tool_uv_qc":        "UV QC Tools",
     "tool_scene_cleanup": "Scene Cleanup Tools",
     "coming_soon":       "* Coming Soon",
-    "launch_fail":       "Failed to launch {name}. Please check the script is installed.",
+    "launch_fail":       "Failed to launch {name}.",
     "launch_ok":         "Launched {name}.",
     "close_all":         "Close All Tools",
     "closed_all":        "All tools closed",
     "no_tools_open":     "No tools open",
+    "check_update_btn":       "Check for Updates",
+    "check_update_btn_active": "Updates Available ({n})",
+    "checking_updates":       "Checking for updates...",
+    "no_updates":             "No updates available.",
+    "update_title":           "Updates Available",
+    "update_apply_btn":       "Update All",
+    "update_all_done":        "All updates applied.",
+    "update_partial":         "{success} of {total} updated.",
+    "update_fail":            "Update failed for {name}: {error}",
+    "update_check_fail":      "Update check failed: {error}",
+    "tool_not_found":         "{name} is not installed. Download now?",
+    "downloading":            "Downloading...",
+    "not_in_manifest":        "{name} is not available for download.",
+    "install_ok":             "{name} installed successfully.",
+    "install_fail":           "Installation failed: {error}",
 }
 
 
@@ -70,6 +85,157 @@ def tr(key, **kwargs):
     if kwargs:
         text = text.format(**kwargs)
     return text
+# --- [500] updater -------------------------------------------------------
+
+import hashlib
+import json
+import os
+import sys
+import shutil
+import importlib
+
+try:
+    _reload = importlib.reload
+except AttributeError:
+    _reload = reload  # Python 2.7 builtin
+
+try:
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+except ImportError:
+    from urllib2 import urlopen, Request, URLError
+
+
+MANIFEST_URL = (
+    "https://raw.githubusercontent.com/"
+    "ryu-japan/qc-tools-release/main/manifest.json")
+_BACKUP_SUFFIX = ".bak"
+
+
+def _get_or_create_script_path(tool_name):
+    """Return local .py path and existence flag.
+
+    Returns:
+        tuple: (path, exists) where exists is True if the file was found.
+    """
+    for p in sys.path:
+        # Pattern 1: <base>/<tool_name>/<tool_name>.py
+        candidate = os.path.join(p, tool_name, tool_name + ".py")
+        if os.path.isfile(candidate):
+            return candidate, True
+        # Pattern 2: <base>/<tool_name>.py
+        candidate = os.path.join(p, tool_name + ".py")
+        if os.path.isfile(candidate):
+            return candidate, True
+
+    # New install: place alongside QC Hub
+    hub_dir = os.path.dirname(os.path.abspath(__file__))
+    install_path = os.path.join(hub_dir, tool_name + ".py")
+    return install_path, False
+
+
+def _fetch_manifest():
+    """Fetch manifest.json from the release repository."""
+    req = Request(MANIFEST_URL)
+    resp = urlopen(req, timeout=10)
+    data = resp.read()
+    return json.loads(data.decode("utf-8"))
+
+
+def _sha256_bytes(data):
+    """Return the hex SHA256 digest of the given bytes."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def check_updates():
+    """Compare local tool versions with the manifest.
+
+    Returns a list of dicts with keys: module, local_version,
+    remote_version, download_url, sha256.
+    Empty list means no updates available.
+    """
+    manifest = _fetch_manifest()
+    updates = []
+    for tool in _TOOLS:
+        module_name = tool["module"]
+        entry = manifest.get(module_name)
+        if entry is None:
+            continue
+        remote_ver = entry.get("version", "")
+        # Get local version
+        try:
+            mod = __import__(module_name)
+            local_ver = getattr(mod, tool["version_attr"], "")
+        except Exception:
+            local_ver = ""
+        if remote_ver and remote_ver != local_ver:
+            updates.append({
+                "module": module_name,
+                "local_version": local_ver,
+                "remote_version": remote_ver,
+                "download_url": entry.get("download_url", ""),
+                "sha256": entry.get("sha256", ""),
+                "is_new_install": local_ver == "",
+            })
+    return updates
+
+
+def apply_update(update_info):
+    """Download, verify, backup and overwrite a tool script.
+
+    Args:
+        update_info: dict with keys module, download_url, sha256.
+    Raises:
+        RuntimeError: on SHA256 mismatch or file operation failure.
+    """
+    module_name = update_info["module"]
+    download_url = update_info["download_url"]
+    expected_sha = update_info["sha256"]
+
+    # Download
+    req = Request(download_url)
+    resp = urlopen(req, timeout=30)
+    data = resp.read()
+
+    # SHA256 verification
+    actual_sha = _sha256_bytes(data)
+    if expected_sha and actual_sha != expected_sha:
+        raise RuntimeError(
+            "SHA256 mismatch for {0}: expected {1}, got {2}".format(
+                module_name, expected_sha, actual_sha))
+
+    # Find local script or determine install path
+    local_path, exists = _get_or_create_script_path(module_name)
+
+    if exists:
+        # Backup (1 generation, overwrite)
+        bak_path = local_path + _BACKUP_SUFFIX
+        try:
+            shutil.copy2(local_path, bak_path)
+        except Exception as e:
+            raise RuntimeError(
+                "Backup failed for {0}: {1}".format(module_name, e))
+
+        # Overwrite
+        try:
+            with open(local_path, "wb") as f:
+                f.write(data)
+        except Exception as e:
+            # Rollback from backup
+            try:
+                shutil.copy2(bak_path, local_path)
+            except Exception:
+                pass
+            raise RuntimeError(
+                "Overwrite failed for {0}: {1}".format(module_name, e))
+    else:
+        # New install: write directly
+        try:
+            with open(local_path, "wb") as f:
+                f.write(data)
+        except Exception as e:
+            raise RuntimeError(
+                "Install failed for {0}: {1}".format(module_name, e))
 # --- [800] ui -----------------------------------------------------------
 
 # Flat-design dark theme for QC tool family UI.
@@ -129,8 +295,8 @@ _QSS = (
     "  color: #e0e0e0;"
     "  border: 1px solid #555555;"
     "  border-radius: 6px;"
-    "  padding: 4px 12px;"
-    "  min-height: 26px;"
+    "  padding: 2px 12px;"
+    "  min-height: 22px;"
     "  font-size: 12px;"
     "  font-weight: normal;"
     "}"
@@ -139,6 +305,46 @@ _QSS = (
     "  border: 1px solid #7aa2f7;"
     "}"
     "QPushButton#closeAllBtn:pressed {"
+    "  background-color: #7aa2f7;"
+    "  color: #1a1a1a;"
+    "}"
+    "QPushButton#checkUpdateBtn {"
+    "  background-color: transparent;"
+    "  color: #e0e0e0;"
+    "  border: 1px solid #555555;"
+    "  border-radius: 6px;"
+    "  padding: 2px 12px;"
+    "  min-height: 22px;"
+    "  font-size: 12px;"
+    "  font-weight: normal;"
+    "}"
+    "QPushButton#checkUpdateBtn:hover {"
+    "  background-color: #3c3c3c;"
+    "  border: 1px solid #7aa2f7;"
+    "}"
+    "QPushButton#checkUpdateBtn:pressed {"
+    "  background-color: #7aa2f7;"
+    "  color: #1a1a1a;"
+    "}"
+)
+
+# Style applied dynamically when updates are available.
+_ACTIVE_UPDATE_BTN_STYLE = (
+    "QPushButton {"
+    "  background-color: #4D6594;"
+    "  color: #e0e0e0;"
+    "  border: 1px solid #5B75AB;"
+    "  border-radius: 6px;"
+    "  padding: 2px 12px;"
+    "  min-height: 22px;"
+    "  font-size: 12px;"
+    "  font-weight: bold;"
+    "}"
+    "QPushButton:hover {"
+    "  background-color: #5A77B0;"
+    "  border: 1px solid #7aa2f7;"
+    "}"
+    "QPushButton:pressed {"
     "  background-color: #7aa2f7;"
     "  color: #1a1a1a;"
     "}"
@@ -156,6 +362,158 @@ _LBL_COLOR_NORMAL = "#e0e0e0"
 _LBL_COLOR_PRESSED = "#1a1a1a"
 
 
+class UpdateDialog(QtWidgets.QDialog):
+    """Dialog for reviewing and applying tool updates (C-plan)."""
+
+    def __init__(self, updates, parent=None):
+        super(UpdateDialog, self).__init__(parent)
+        self.setWindowTitle(tr("update_title"))
+        self.setMinimumWidth(320)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
+        self._updates = updates
+        self._parent_hub = parent
+        self._layout = QtWidgets.QVBoxLayout(self)
+        self._layout.setContentsMargins(16, 16, 16, 16)
+        self._layout.setSpacing(10)
+        self._build_confirm_ui()
+
+    def _build_confirm_ui(self):
+        """Build the confirmation screen (step 1)."""
+        for upd in self._updates:
+            if upd.get("is_new_install"):
+                row = QtWidgets.QLabel(
+                    "{0}\n  New install \u2192 {1}".format(
+                        upd["module"],
+                        upd["remote_version"]))
+            else:
+                row = QtWidgets.QLabel(
+                    "{0}\n  {1} \u2192 {2}".format(
+                        upd["module"],
+                        upd["local_version"] or "\u2014",
+                        upd["remote_version"]))
+            row.setStyleSheet(
+                "color: #e0e0e0; font-size: 12px;"
+                " background: transparent;")
+            self._layout.addWidget(row)
+
+        self._layout.addSpacing(8)
+
+        btn_lay = QtWidgets.QHBoxLayout()
+        apply_btn = QtWidgets.QPushButton(tr("update_apply_btn"))
+        apply_btn.clicked.connect(self._apply_all)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_lay.addWidget(apply_btn)
+        btn_lay.addWidget(cancel_btn)
+        self._layout.addLayout(btn_lay)
+
+    def _clear_layout(self):
+        """Remove all widgets and sub-layouts from the layout."""
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            sub = item.layout()
+            if sub:
+                while sub.count():
+                    child = sub.takeAt(0)
+                    w = child.widget()
+                    if w:
+                        w.deleteLater()
+
+    def _apply_all(self):
+        """Apply all updates and switch to the result screen."""
+        results = []
+        success_count = 0
+        for upd in self._updates:
+            try:
+                apply_update(upd)
+                results.append({
+                    "module": upd["module"],
+                    "version": upd["remote_version"],
+                    "ok": True, "error": ""})
+                success_count += 1
+            except Exception as e:
+                results.append({
+                    "module": upd["module"],
+                    "version": upd["remote_version"],
+                    "ok": False, "error": str(e)})
+
+        # Switch to result screen
+        self._clear_layout()
+
+        for res in results:
+            if res["ok"]:
+                text = "\u2713 {0}  \u2192 {1}".format(
+                    res["module"], res["version"])
+                color = "#a9dc76"
+            else:
+                text = "\u2717 {0} \u2014 {1}".format(
+                    res["module"], res["error"])
+                color = "#ff6188"
+            lbl = QtWidgets.QLabel(text)
+            lbl.setStyleSheet(
+                "color: {0}; font-size: 12px;"
+                " background: transparent;".format(color))
+            lbl.setWordWrap(True)
+            self._layout.addWidget(lbl)
+
+        self._layout.addSpacing(4)
+        total = len(self._updates)
+        if success_count == total:
+            msg_lbl = QtWidgets.QLabel(tr("update_all_done"))
+        else:
+            msg_lbl = QtWidgets.QLabel(
+                tr("update_partial",
+                   success=success_count, total=total))
+        msg_lbl.setStyleSheet(
+            "color: #e0e0e0; font-size: 12px;"
+            " background: transparent; font-weight: bold;")
+        self._layout.addWidget(msg_lbl)
+
+        self._layout.addSpacing(8)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        self._layout.addWidget(close_btn)
+
+        # Reload updated modules
+        self._reload_modules(results)
+
+    def _reload_modules(self, results):
+        """Reload updated tool modules and refresh QC Hub."""
+        hub_updated = False
+        for res in results:
+            if not res["ok"]:
+                continue
+            module_name = res["module"]
+            # Close open windows for this tool
+            for tool in _TOOLS:
+                if tool["module"] == module_name:
+                    for wn in tool["window_names"]:
+                        for w in QtWidgets.QApplication.topLevelWidgets():
+                            if w.objectName() == wn and w.isVisible():
+                                w.close()
+                    break
+            # Reload module
+            if module_name in sys.modules:
+                try:
+                    _reload(sys.modules[module_name])
+                except Exception:
+                    pass
+            if module_name == "qc_hub":
+                hub_updated = True
+
+        if hub_updated and self._parent_hub is not None:
+            self.close()
+            if "qc_hub" in sys.modules:
+                try:
+                    _reload(sys.modules["qc_hub"])
+                    sys.modules["qc_hub"].launch()
+                except Exception:
+                    pass
+
+
 class QCHubUI(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------
@@ -168,8 +526,20 @@ class QCHubUI(QtWidgets.QWidget):
         self.setMinimumWidth(240)
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
         self.setStyleSheet(_QSS)
+        self._pending_updates = []
         self._build_ui()
         self.resize(240, self.sizeHint().height())
+        # Auto-check for updates on startup
+        try:
+            self._pending_updates = check_updates()
+            if self._pending_updates:
+                n = len(self._pending_updates)
+                self._update_btn.setText(
+                    tr("check_update_btn_active", n=n))
+                self._update_btn.setStyleSheet(
+                    _ACTIVE_UPDATE_BTN_STYLE)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # UI Build
@@ -240,6 +610,13 @@ class QCHubUI(QtWidgets.QWidget):
         close_all_btn.clicked.connect(self._close_all_tools)
         root.addWidget(close_all_btn)
 
+        # --- Check for Updates ---
+        self._update_btn = QtWidgets.QPushButton(
+            tr("check_update_btn"))
+        self._update_btn.setObjectName("checkUpdateBtn")
+        self._update_btn.clicked.connect(self._check_updates_ui)
+        root.addWidget(self._update_btn)
+
         root.addStretch()
 
         # --- Status bar (version display) ---
@@ -285,6 +662,71 @@ class QCHubUI(QtWidgets.QWidget):
         self._status_bar.showMessage(msg, 5000)
 
     # ------------------------------------------------------------------
+    # Check for Updates
+    # ------------------------------------------------------------------
+    def _check_updates_ui(self):
+        """Handle the Check for Updates button click."""
+        self._status_bar.showMessage(tr("checking_updates"), 0)
+        QtWidgets.QApplication.processEvents()
+        try:
+            updates = check_updates()
+        except Exception as e:
+            self._status_bar.showMessage(
+                tr("update_check_fail", error=str(e)), 7000)
+            return
+        finally:
+            self._status_bar.clearMessage()
+
+        if not updates:
+            self._status_bar.showMessage(tr("no_updates"), 5000)
+            # Reset button to default state
+            self._update_btn.setText(tr("check_update_btn"))
+            self._update_btn.setStyleSheet("")
+            self._pending_updates = []
+            return
+
+        self._pending_updates = updates
+        dlg = UpdateDialog(updates, parent=self)
+        dlg.setStyleSheet(_QSS)
+        result = dlg.exec_()
+
+        # After dialog closes, refresh version labels
+        self._refresh_version_labels()
+        if result == QtWidgets.QDialog.Accepted:
+            # Updates applied — reset button
+            self._update_btn.setText(tr("check_update_btn"))
+            self._update_btn.setStyleSheet("")
+            self._pending_updates = []
+        else:
+            # Cancelled — restore active state
+            n = len(self._pending_updates)
+            self._update_btn.setText(
+                tr("check_update_btn_active", n=n))
+            self._update_btn.setStyleSheet(
+                _ACTIVE_UPDATE_BTN_STYLE)
+
+    def _refresh_version_labels(self):
+        """Refresh version labels on tool buttons after updates."""
+        grp = self.findChild(QtWidgets.QGroupBox)
+        if grp is None:
+            return
+        grp_lay = grp.layout()
+        for i, tool in enumerate(_TOOLS):
+            if i >= grp_lay.count():
+                break
+            btn = grp_lay.itemAt(i).widget()
+            if btn is None:
+                continue
+            btn_lay = btn.layout()
+            if btn_lay is None or btn_lay.count() < 2:
+                continue
+            ver_lbl = btn_lay.itemAt(1).widget()
+            if ver_lbl is not None:
+                ver_text = self._get_tool_version(
+                    tool["module"], tool["version_attr"])
+                ver_lbl.setText(ver_text)
+
+    # ------------------------------------------------------------------
     # Launch
     # ------------------------------------------------------------------
     def _on_launch(self, module_name, label_key):
@@ -294,9 +736,43 @@ class QCHubUI(QtWidgets.QWidget):
             mod = __import__(module_name)
             mod.launch()
             print(tr("launch_ok", name=display_name))
+        except ImportError:
+            result = QtWidgets.QMessageBox.question(
+                self, WINDOW_TITLE,
+                tr("tool_not_found", name=display_name),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            if result == QtWidgets.QMessageBox.Yes:
+                self._download_tool(module_name, label_key)
         except Exception as e:
             msg = tr("launch_fail", name=display_name)
             cmds.warning("{0} ({1})".format(msg, e))
+
+    def _download_tool(self, module_name, label_key):
+        """Download a tool that is not installed locally."""
+        display_name = tr(label_key)
+        self._status_bar.showMessage(tr("downloading"), 0)
+        QtWidgets.QApplication.processEvents()
+        try:
+            manifest = _fetch_manifest()
+            entry = manifest.get(module_name)
+            if entry is None:
+                self._status_bar.showMessage(
+                    tr("not_in_manifest", name=display_name), 5000)
+                return
+            update_info = {
+                "module": module_name,
+                "download_url": entry.get("download_url", ""),
+                "sha256": entry.get("sha256", ""),
+                "remote_version": entry.get("version", ""),
+            }
+            apply_update(update_info)
+            __import__(module_name)
+            self._refresh_version_labels()
+            self._status_bar.showMessage(
+                tr("install_ok", name=display_name), 5000)
+        except Exception as e:
+            self._status_bar.showMessage(
+                tr("install_fail", error=str(e)), 7000)
 # --- [900] entry --------------------------------------------------------
 
 def launch():
