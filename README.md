@@ -30,6 +30,13 @@ Maya 向け QC ツール群の配布用リポジトリ。
 | `uv_qc_tools.py` / `model_qc_tools.py` / `scene_cleanup_tools.py` / `qc_hub.py` | `C:/Users/<ユーザー名>/Documents/maya/<バージョン>/scripts/` |
 | `qc_tools_plugin.py` | `C:/Users/<ユーザー名>/Documents/maya/<バージョン>/plug-ins/` |
 
+`qc_tools_plugin.py` の有効化:
+
+1. Maya を起動する
+2. **Windows → Settings/Preferences → Plugin Manager** を開く
+3. `qc_tools_plugin` の **Loaded** にチェックを入れる
+4. 次回以降の自動読み込みには **Auto load** にもチェックを入れる
+
 ### 方法 2: QC Hub からアップデート
 
 QC Hub の自動更新機能を使えば、手動配置なしでツールの更新・新規取得ができます。
