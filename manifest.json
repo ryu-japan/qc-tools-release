@@ -4,5 +4,11 @@
     "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/qc_tools_plugin/qc_tools_plugin.py",
     "sha256": "af1b0946d8d2f28b30f2b6a0529d9464b81a9a039ee4d0926c6bb32a51bc10ea",
     "released_at": "2026-04-05T16:21:53Z"
+  },
+  "qc_hub": {
+    "version": "0.3.3",
+    "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/qc_hub/qc_hub.py",
+    "sha256": "19d0b48b35ce9f5c5e01dbae08336414e4c8ad2128b634b7469d2f54e1306112",
+    "released_at": "2026-04-06T05:37:32Z"
   }
 }
