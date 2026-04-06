@@ -25,7 +25,7 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.5.0"
+__VERSION__ = "0.5.1"
 __RELEASE_DATE__ = "2026-04-06"
 
 WINDOW_TITLE = "QC Hub"
@@ -509,10 +509,14 @@ class UpdateDialog(QtWidgets.QDialog):
 
         if hub_updated and self._parent_hub is not None:
             self.close()
+            # evalDeferred runs in a fresh context where module-level
+            # _reload is unavailable.  Use (getattr(..., None) or reload)
+            # so Python 3 picks importlib.reload and Python 2.7 falls
+            # back to the builtin reload without triggering NameError.
             cmds.evalDeferred(
                 "import sys; "
                 "m = sys.modules.get('qc_hub') or __import__('qc_hub'); "
-                "getattr(__import__('importlib'), 'reload', reload)(m); "
+                "(getattr(__import__('importlib'), 'reload', None) or reload)(m); "
                 "m.launch()")
 
 
