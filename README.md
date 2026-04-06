@@ -9,6 +9,8 @@ Maya 向け QC ツール群の配布用リポジトリ。
 
 ## 対象ツール
 
+各リンクを右クリックし「名前を付けてリンク先を保存」でダウンロードしてください。
+
 | ツール | 説明 | Download |
 |---|---|---|
 | uv_qc_tools | UV チェックツール | [uv_qc_tools.py](https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/uv_qc_tools/uv_qc_tools.py) |
