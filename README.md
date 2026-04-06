@@ -16,3 +16,28 @@ Maya 向け QC ツール群の配布用リポジトリ。
 | scene_cleanup_tools | シーン整理ツール | [scene_cleanup_tools.py](https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/scene_cleanup_tools/scene_cleanup_tools.py) |
 | qc_hub | QC ランチャー | [qc_hub.py](https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/qc_hub/qc_hub.py) |
 | qc_tools_plugin | Maya メニュープラグイン | [qc_tools_plugin.py](https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/qc_tools_plugin/qc_tools_plugin.py) |
+
+## インストール
+
+### 方法 1: 手動配置
+
+各 `.py` ファイルをダウンロードし、Maya の所定フォルダに配置してください。
+
+| ファイル | 配置先 |
+|---|---|
+| `uv_qc_tools.py` / `model_qc_tools.py` / `scene_cleanup_tools.py` / `qc_hub.py` | `C:/Users/<ユーザー名>/Documents/maya/<バージョン>/scripts/` |
+| `qc_tools_plugin.py` | `C:/Users/<ユーザー名>/Documents/maya/<バージョン>/plug-ins/` |
+
+### 方法 2: QC Hub からアップデート
+
+QC Hub の自動更新機能を使えば、手動配置なしでツールの更新・新規取得ができます。
+
+1. QC Hub を起動します
+2. **Check for Updates** をクリックします
+3. 更新があれば **Update All** で一括適用できます
+
+- 各ツールは QC Hub と同じ `scripts/` フォルダに自動配置されます
+- 更新前のファイルは `.bak` として自動バックアップされます
+- Maya の再起動は不要です（即時反映）
+
+> **注意:** `qc_tools_plugin.py` は自動更新の対象外です。手動で `plug-ins/` に配置してください。
