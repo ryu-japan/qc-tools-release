@@ -3,7 +3,7 @@ from __future__ import print_function, division, unicode_literals
 import maya.api.OpenMaya as om2
 import maya.cmds as cmds
 
-__VERSION__ = "1.0.0"
+__VERSION__ = "1.0.1"
 
 MENU_NAME = "QCToolsMenu"
 
@@ -30,7 +30,7 @@ def delete_menu():
 
 
 def initializePlugin(plugin):
-    om2.MFnPlugin(plugin, "Ryu", "1.0.0")
+    om2.MFnPlugin(plugin, "Ryu", __VERSION__)
     create_menu()
 
 
