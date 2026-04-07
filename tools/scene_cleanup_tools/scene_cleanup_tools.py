@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Scene Cleanup Tools - Maya scene cleanup checker.
 
-Checks 17 items related to scene state, structure and settings.
+Checks 18 items related to scene state, structure and settings.
 Compatible with Maya 2018+ (Python 2.7 / 3, PySide2 / PySide6).
 """
 from __future__ import absolute_import, division, print_function, unicode_literals
@@ -26,13 +26,13 @@ import maya.OpenMayaUI as omui
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.16.2"
+__VERSION__ = "0.17.0"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
 HELP_DIALOG_OBJECT_NAME = "sceneCleanupHelpDialog"
 WINDOW_WIDTH = 420
-WINDOW_HEIGHT = 655
+WINDOW_HEIGHT = 735
 
 log = logging.getLogger(WINDOW_TITLE)
 
@@ -331,11 +331,18 @@ _TR = {
     "chk_empty_sets":        {"en": "Empty Object Sets",              "ja": "\u7a7a\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u30bb\u30c3\u30c8"},
     "chk_namespaces":        {"en": "Empty Namespaces",              "ja": "\u7a7a\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9"},
 
-    # -- Check items: Scene Environment (4) --
+    # -- Check items: Scene Environment (5) --
     "chk_scene_units":       {"en": "Scene Units / Up-Axis",         "ja": "\u30b7\u30fc\u30f3\u5358\u4f4d / Up\u8ef8"},
     "chk_unknown_nodes":     {"en": "Unknown Nodes",                 "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9"},
     "chk_referenced_nodes":  {"en": "Referenced Nodes",              "ja": "\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u6b8b\u5b58"},
     "chk_naming_check":      {"en": "Naming Check",                  "ja": "\u547d\u540d\u898f\u5247\u30c1\u30a7\u30c3\u30af"},
+
+    "chk_file_paths":        {"en": "File Paths",                    "ja": "ファイルパスチェック"},
+    "file_paths_scene":      {"en": "Scene",                         "ja": "シーン"},
+    "file_paths_tex":        {"en": "Tex",                           "ja": "テクスチャ"},
+    "file_paths_relative":   {"en": "Relative",                      "ja": "相対パス"},
+    "file_paths_absolute":   {"en": "Absolute",                      "ja": "絶対パス"},
+    "file_paths_missing":    {"en": "Missing File",                  "ja": "欠損ファイル検出"},
 
     # -- Naming params --
     "naming_regex":          {"en": "Regex pattern:",                "ja": "\u6b63\u898f\u8868\u73fe\u30d1\u30bf\u30fc\u30f3:"},
@@ -386,6 +393,11 @@ _TR = {
     "detail_unknown_node":           {"en": "Unknown node (origType: {0})",        "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9\uff08\u5143\u30bf\u30a4\u30d7: {0}\uff09"},
     "detail_unknown_node_notype":    {"en": "Unknown node",                        "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9"},
     "detail_naming_mismatch":        {"en": "Name does not match pattern: {0}",    "ja": "\u547d\u540d\u898f\u5247\u306b\u4e0d\u4e00\u81f4: {0}"},
+
+    "detail_wrong_folder":           {"en": "Wrong folder name",                   "ja": "フォルダ名不一致"},
+    "detail_expected_relative":      {"en": "Absolute path detected",              "ja": "絶対パスを検出"},
+    "detail_expected_absolute":      {"en": "Relative path detected",              "ja": "相対パスを検出"},
+    "detail_missing_file":           {"en": "File not found",                      "ja": "ファイル未検出"},
 
     # -- Results --
     "results_summary":       {"en": "{count} issue(s)",              "ja": "{count} \u4ef6"},
@@ -1124,6 +1136,96 @@ def check_naming_check(targets, regex_pattern=""):
             })
 
     return results
+
+
+def check_file_paths(scene_folder="scenes", tex_folder="sourceimages",
+                     expected_path_type="relative", check_missing=True):
+    """Check file paths: folder name, path type, and missing files."""
+    results = []
+
+    proj_root = None
+    try:
+        proj_root = cmds.workspace(q=True, rd=True)
+    except Exception:
+        pass
+
+    # --- 1. Scene file folder validation ---
+    if scene_folder:
+        try:
+            scene_path = cmds.file(q=True, sceneName=True) or ""
+        except Exception:
+            scene_path = ""
+        if scene_path:
+            norm = scene_path.replace("\\", "/")
+            scene_basename = norm.rsplit("/", 1)[-1] if "/" in norm else norm
+            parent_dir = norm.rsplit("/", 1)[0] if "/" in norm else ""
+            expected_norm = scene_folder.strip("/").replace("\\", "/")
+            if parent_dir and not parent_dir.lower().endswith(expected_norm.lower()):
+                results.append({
+                    "node": scene_basename,
+                    "detail": tr("detail_wrong_folder"),
+                    "_sort": 0,
+                })
+
+    # --- 2 & 3. File node checks ---
+    file_nodes = cmds.ls(type="file") or []
+    check_abs = expected_path_type.lower() == "absolute"
+
+    for node in file_nodes:
+        try:
+            path = cmds.getAttr(node + ".fileTextureName") or ""
+        except Exception:
+            continue
+        if not path:
+            continue
+
+        # Folder name validation for tex
+        if tex_folder:
+            norm_path = path.replace("\\", "/")
+            parent_dir = norm_path.rsplit("/", 1)[0] if "/" in norm_path else ""
+            expected_norm = tex_folder.strip("/").replace("\\", "/")
+            if parent_dir and not parent_dir.lower().endswith(expected_norm.lower()):
+                results.append({
+                    "node": node,
+                    "detail": tr("detail_wrong_folder"),
+                    "_sort": 0,
+                })
+
+        # Path type validation
+        is_abs = os.path.isabs(path)
+        if check_abs and not is_abs:
+            results.append({
+                "node": node,
+                "detail": tr("detail_expected_absolute"),
+                "_sort": 1,
+            })
+        elif not check_abs and is_abs:
+            results.append({
+                "node": node,
+                "detail": tr("detail_expected_relative"),
+                "_sort": 1,
+            })
+
+        # Missing file detection
+        if check_missing:
+            if "<UDIM>" in path or "<udim>" in path:
+                continue
+            resolved = path
+            if not os.path.isabs(path) and proj_root:
+                resolved = os.path.join(proj_root, path)
+            if not os.path.isfile(resolved):
+                results.append({
+                    "node": node,
+                    "detail": tr("detail_missing_file"),
+                    "_sort": 2,
+                })
+
+    # Sort by category, then strip internal key
+    results.sort(key=lambda r: r.get("_sort", 9))
+    for r in results:
+        r.pop("_sort", None)
+
+    return results
 # ---------------------------------------------------------------------------
 # [800] ui — Main Window, Results Window, Help Dialog, Category UI
 # ---------------------------------------------------------------------------
@@ -1527,12 +1629,13 @@ _CHECK_ITEMS_UNUSED = [
     ("namespaces",           "chk_namespaces",           True,  False),
 ]
 
-# --- Scene Environment (4) ---
+# --- Scene Environment (5) ---
 _CHECK_ITEMS_SCENE_ENV = [
     ("scene_units",          "chk_scene_units",          True,  True),
     ("unknown_nodes",        "chk_unknown_nodes",        True,  False),
     ("referenced_nodes",     "chk_referenced_nodes",     True,  False),
     ("naming_check",         "chk_naming_check",         True,  True),
+    ("file_paths",           "chk_file_paths",           True,  True),
 ]
 
 _CANONICAL_ORDER = (
@@ -1716,6 +1819,48 @@ class MainWindow(QtWidgets.QDialog):
                 "combo_axis": combo_axis,
             }
 
+        elif key == "file_paths":
+            layout = QtWidgets.QVBoxLayout(container)
+            layout.setContentsMargins(8, 0, 0, 0)
+            layout.setSpacing(4)
+            # Row 1: Scene / Tex folder names
+            row1 = QtWidgets.QHBoxLayout()
+            row1.setSpacing(4)
+            lbl_scene = QtWidgets.QLabel(tr("file_paths_scene"))
+            edit_scene = QtWidgets.QLineEdit("scenes")
+            edit_scene.setMinimumWidth(80)
+            lbl_tex = QtWidgets.QLabel(tr("file_paths_tex"))
+            edit_tex = QtWidgets.QLineEdit("sourceimages")
+            edit_tex.setMinimumWidth(80)
+            row1.addWidget(lbl_scene)
+            row1.addWidget(edit_scene, 1)
+            row1.addWidget(lbl_tex)
+            row1.addWidget(edit_tex, 1)
+            layout.addLayout(row1)
+            # Row 2: Path type radio buttons
+            row2 = QtWidgets.QHBoxLayout()
+            row2.setSpacing(4)
+            rb_relative = QtWidgets.QRadioButton(tr("file_paths_relative"))
+            rb_absolute = QtWidgets.QRadioButton(tr("file_paths_absolute"))
+            rb_relative.setChecked(True)
+            row2.addWidget(rb_relative)
+            row2.addWidget(rb_absolute)
+            row2.addStretch()
+            layout.addLayout(row2)
+            # Row 3: Missing File checkbox
+            cb_missing = QtWidgets.QCheckBox(tr("file_paths_missing"))
+            cb_missing.setChecked(True)
+            layout.addWidget(cb_missing)
+            self._param_widgets[key] = {
+                "label_scene": lbl_scene,
+                "edit_scene": edit_scene,
+                "label_tex": lbl_tex,
+                "edit_tex": edit_tex,
+                "rb_relative": rb_relative,
+                "rb_absolute": rb_absolute,
+                "cb_missing": cb_missing,
+            }
+
         return container
 
     # === Check control ======================================================
@@ -1809,6 +1954,12 @@ class MainWindow(QtWidgets.QDialog):
         if pw:
             params["expected_unit"] = pw["combo_unit"].currentText().lower()
             params["expected_upaxis"] = pw["combo_axis"].currentText().lower()
+        pw = self._param_widgets.get("file_paths")
+        if pw:
+            params["file_paths_scene"] = pw["edit_scene"].text() or "scenes"
+            params["file_paths_tex"] = pw["edit_tex"].text() or "sourceimages"
+            params["file_paths_type"] = "absolute" if pw["rb_absolute"].isChecked() else "relative"
+            params["file_paths_missing"] = pw["cb_missing"].isChecked()
 
         # Show progress
         self._progress_bar.setMaximum(len(enabled))
@@ -1917,6 +2068,13 @@ class MainWindow(QtWidgets.QDialog):
         if pw:
             pw["label_unit"].setText(tr("unit_label"))
             pw["label_axis"].setText(tr("upaxis_label"))
+        pw = self._param_widgets.get("file_paths")
+        if pw:
+            pw["label_scene"].setText(tr("file_paths_scene"))
+            pw["label_tex"].setText(tr("file_paths_tex"))
+            pw["rb_relative"].setText(tr("file_paths_relative"))
+            pw["rb_absolute"].setText(tr("file_paths_absolute"))
+            pw["cb_missing"].setText(tr("file_paths_missing"))
 
     # === Cleanup ============================================================
 
@@ -1952,11 +2110,13 @@ _CHECK_FUNC_MAP = {
     "unknown_nodes":        check_unknown_nodes,
     "referenced_nodes":     check_referenced_nodes,
     "naming_check":         check_naming_check,
+    "file_paths":           check_file_paths,
 }
 
 _SCENE_WIDE_KEYS = {
     "unused_nodes", "unused_mat", "unused_layers", "empty_sets", "namespaces",
     "unknown_nodes", "referenced_nodes", "duplicate_names", "scene_units",
+    "file_paths",
 }
 
 
@@ -2025,6 +2185,13 @@ class QCWorker(QtCore.QObject):
                 return func(
                     expected_unit=self._params.get("expected_unit", "cm"),
                     expected_upaxis=self._params.get("expected_upaxis", "y"),
+                )
+            elif key == "file_paths":
+                return func(
+                    scene_folder=self._params.get("file_paths_scene", "scenes"),
+                    tex_folder=self._params.get("file_paths_tex", "sourceimages"),
+                    expected_path_type=self._params.get("file_paths_type", "relative"),
+                    check_missing=self._params.get("file_paths_missing", True),
                 )
             else:
                 return func()
