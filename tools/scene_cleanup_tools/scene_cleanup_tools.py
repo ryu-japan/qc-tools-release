@@ -26,7 +26,7 @@ import maya.OpenMayaUI as omui
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.17.0"
+__VERSION__ = "0.17.1"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
@@ -717,7 +717,7 @@ def check_unused_nodes():
             # Has children (e.g. history nodes) but no visible shapes
             has_sub_transform = False
             for ch in children:
-                if cmds.nodeType(ch) == "transform":
+                if cmds.objectType(ch, isAType="transform"):
                     has_sub_transform = True
                     break
             if not has_sub_transform:
