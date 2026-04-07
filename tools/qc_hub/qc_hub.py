@@ -25,7 +25,7 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.7.0"
+__VERSION__ = "0.7.1"
 __RELEASE_DATE__ = "2026-04-07"
 
 WINDOW_TITLE = "QC Hub"
@@ -126,6 +126,8 @@ import os
 import sys
 import shutil
 import importlib
+import io
+import re
 
 try:
     _reload = importlib.reload
@@ -229,13 +231,20 @@ def check_updates():
         remote_ver = entry.get("version", "")
         # Get local version
         if tool.get("is_plugin"):
-            try:
-                if cmds.pluginInfo(module_name, q=True, loaded=True):
-                    local_ver = cmds.pluginInfo(
-                        module_name, q=True, version=True) or ""
-                else:
+            # Read version from file instead of cmds.pluginInfo —
+            # Maya caches plugin info and returns stale version
+            # after apply_update overwrites the file.
+            _path, _exists = _get_plugin_path(module_name)
+            if _exists and _path:
+                try:
+                    with io.open(_path, "r", encoding="utf-8") as _f:
+                        _m = re.search(
+                            r'''__VERSION__\s*=\s*["']([^"']+)["']''',
+                            _f.read())
+                    local_ver = _m.group(1) if _m else ""
+                except Exception:
                     local_ver = ""
-            except Exception:
+            else:
                 local_ver = ""
         else:
             try:
@@ -358,6 +367,9 @@ def apply_update(update_info):
 
     # Plugin: reload after overwrite
     if is_plug and was_loaded:
+        # Purge cached module so loadPlugin imports the fresh file
+        if module_name in sys.modules:
+            del sys.modules[module_name]
         try:
             cmds.loadPlugin(local_path)
         except Exception as e:
