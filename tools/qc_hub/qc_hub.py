@@ -25,36 +25,57 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.6.0"
+__VERSION__ = "0.7.0"
 __RELEASE_DATE__ = "2026-04-07"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
 
 
+# --- Tool group definitions ----------------------------------------------
+# Groups are rendered top-to-bottom.  Each dict maps a group key to its
+# tr() label key.  Groups with zero visible tools are hidden.
+_TOOL_GROUPS = [
+    {"key": "qc_tools", "label_key": "group_qc_tools"},
+    {"key": "other",    "label_key": "group_other"},
+]
+
 # --- Tool definitions ---------------------------------------------------
 # Each entry is a dict with keys: module, label_key, enabled,
-#   version_attr, window_names, show_button (optional, default True).
+#   version_attr, window_names, group,
+#   show_button (optional, default True),
+#   command (optional callable — overrides module.launch()),
+#   updatable (optional bool, default True).
 # To add a new tool, append one dict here.
 _TOOLS = [
     {"module": "model_qc_tools", "label_key": "tool_model_qc",
      "enabled": True, "version_attr": "__VERSION__",
+     "group": "qc_tools",
      "window_names": ["modelQCToolsWindow", "modelQCResultsWindow", "modelQCHelpDialog"]},
     {"module": "uv_qc_tools", "label_key": "tool_uv_qc",
      "enabled": True, "version_attr": "__VERSION__",
+     "group": "qc_tools",
      "window_names": ["uvQCToolsWindow", "uvQCResultsWindow", "uvQCPixelEdgeResultsWindow",
                        "uvQCOverlapResultsWindow", "uvQCOrientationResultsWindow",
                        "uvQCTexelDensityResultsWindow", "uvQCHelpDialog"]},
     {"module": "scene_cleanup_tools", "label_key": "tool_scene_cleanup",
      "enabled": True, "version_attr": "__VERSION__",
+     "group": "qc_tools",
      "window_names": ["sceneCleanupToolsWindow", "sceneCleanupResultsWindow", "sceneCleanupHelpDialog"]},
     {"module": "qc_hub", "label_key": "tool_qc_hub",
      "enabled": True, "version_attr": "__VERSION__",
+     "group": "qc_tools",
      "window_names": ["qcHubWindow"], "show_button": False},
     {"module": "qc_tools_plugin", "label_key": "tool_qc_plugin",
      "enabled": True, "version_attr": "__VERSION__",
+     "group": "qc_tools",
      "window_names": [], "show_button": False,
      "is_plugin": True},
+    {"label_key": "tool_dora_skin",
+     "enabled": True,
+     "group": "other",
+     "command": lambda: __import__("DoraSkinWeightToolsPy").launch(),
+     "window_names": [], "updatable": False},
 ]
 # --- [010] strings ---------------------------------------------------------
 
@@ -85,6 +106,9 @@ _TR = {
     "install_fail":           "Installation failed: {error}",
     "tool_qc_plugin":         "QC Tools Plugin",
     "plugin_unload_fail":     "Failed to unload plugin: {error}",
+    "group_qc_tools":         "QC Tools",
+    "group_other":            "Other",
+    "tool_dora_skin":         "DoraSkinWeightToolsPy",
 }
 
 
@@ -194,7 +218,11 @@ def check_updates():
     manifest = _fetch_manifest()
     updates = []
     for tool in _TOOLS:
-        module_name = tool["module"]
+        if not tool.get("updatable", True):
+            continue
+        module_name = tool.get("module")
+        if not module_name:
+            continue
         entry = manifest.get(module_name)
         if entry is None:
             continue
@@ -230,7 +258,7 @@ def check_updates():
 def _is_plugin(module_name):
     """Return True if the module is marked as a plugin in _TOOLS."""
     for tool in _TOOLS:
-        if tool["module"] == module_name:
+        if tool.get("module") == module_name:
             return tool.get("is_plugin", False)
     return False
 
@@ -449,6 +477,28 @@ _ACTIVE_UPDATE_BTN_STYLE = (
     "}"
 )
 
+# Style for compact tool buttons (external tools without version info).
+_COMPACT_BTN_STYLE = (
+    "QPushButton {"
+    "  background-color: transparent;"
+    "  color: #e0e0e0;"
+    "  border: 1px solid #555555;"
+    "  border-radius: 6px;"
+    "  padding: 2px 12px;"
+    "  min-height: 22px;"
+    "  font-size: 12px;"
+    "  font-weight: normal;"
+    "}"
+    "QPushButton:hover {"
+    "  background-color: #3c3c3c;"
+    "  border: 1px solid #7aa2f7;"
+    "}"
+    "QPushButton:pressed {"
+    "  background-color: #7aa2f7;"
+    "  color: #1a1a1a;"
+    "}"
+)
+
 
 # Label style templates (color placeholder filled at runtime).
 _NAME_LBL_STYLE = (
@@ -594,7 +644,7 @@ class UpdateDialog(QtWidgets.QDialog):
                 continue
             # Close open windows for this tool
             for tool in _TOOLS:
-                if tool["module"] == module_name:
+                if tool.get("module") == module_name:
                     for wn in tool["window_names"]:
                         for w in QtWidgets.QApplication.topLevelWidgets():
                             if w.objectName() == wn and w.isVisible():
@@ -657,62 +707,86 @@ class QCHubUI(QtWidgets.QWidget):
         root.setContentsMargins(8, 8, 8, 10)
         root.setSpacing(8)
 
-        # --- Tool buttons (grouped) ---
-        grp = QtWidgets.QGroupBox("")
-        grp_lay = QtWidgets.QVBoxLayout(grp)
-        grp_lay.setSpacing(6)
-        grp_lay.setContentsMargins(4, 4, 4, 4)
-
-        for tool in _TOOLS:
-            if not tool.get("show_button", True):
+        # --- Tool buttons (grouped by _TOOL_GROUPS) ---
+        for grp_def in _TOOL_GROUPS:
+            grp_key = grp_def["key"]
+            members = [t for t in _TOOLS
+                       if t.get("group") == grp_key
+                       and t.get("show_button", True)]
+            if not members:
                 continue
-            btn = QtWidgets.QPushButton()
-            btn.setEnabled(tool["enabled"])
-            if not tool["enabled"]:
-                btn.setToolTip(tr("coming_soon"))
-            btn.clicked.connect(
-                lambda checked=False, m=tool["module"],
-                       k=tool["label_key"]: self._on_launch(m, k))
 
-            btn_lay = QtWidgets.QVBoxLayout(btn)
-            btn_lay.setContentsMargins(4, 4, 4, 4)
-            btn_lay.setSpacing(0)
+            grp = QtWidgets.QGroupBox(tr(grp_def["label_key"]))
+            grp_lay = QtWidgets.QVBoxLayout(grp)
+            grp_lay.setSpacing(6)
+            grp_lay.setContentsMargins(4, 4, 4, 4)
 
-            name_lbl = QtWidgets.QLabel(tr(tool["label_key"]))
-            name_lbl.setAlignment(QtCore.Qt.AlignCenter)
-            name_lbl.setStyleSheet(
-                _NAME_LBL_STYLE.format(_LBL_COLOR_NORMAL))
-            name_lbl.setAttribute(
-                QtCore.Qt.WA_TransparentForMouseEvents)
-            btn_lay.addWidget(name_lbl)
+            for tool in members:
+                btn = QtWidgets.QPushButton()
+                btn.setEnabled(tool["enabled"])
+                if not tool["enabled"]:
+                    btn.setToolTip(tr("coming_soon"))
+                btn.clicked.connect(
+                    lambda checked=False, t=tool:
+                        self._on_launch_tool(t))
 
-            ver_text = self._get_tool_version(
-                tool["module"], tool["version_attr"])
-            ver_lbl = QtWidgets.QLabel(ver_text)
-            ver_lbl.setAlignment(QtCore.Qt.AlignCenter)
-            ver_lbl.setStyleSheet(
-                _VER_LBL_STYLE.format(_LBL_COLOR_NORMAL))
-            ver_lbl.setAttribute(
-                QtCore.Qt.WA_TransparentForMouseEvents)
-            btn_lay.addWidget(ver_lbl)
+                mod_name = tool.get("module")
+                ver_attr = tool.get("version_attr")
 
-            # Sync label color with button pressed state.
-            btn.pressed.connect(
-                lambda n=name_lbl, v=ver_lbl: (
-                    n.setStyleSheet(
-                        _NAME_LBL_STYLE.format(_LBL_COLOR_PRESSED)),
-                    v.setStyleSheet(
-                        _VER_LBL_STYLE.format(_LBL_COLOR_PRESSED))))
-            btn.released.connect(
-                lambda n=name_lbl, v=ver_lbl: (
-                    n.setStyleSheet(
-                        _NAME_LBL_STYLE.format(_LBL_COLOR_NORMAL)),
-                    v.setStyleSheet(
-                        _VER_LBL_STYLE.format(_LBL_COLOR_NORMAL))))
+                if mod_name and ver_attr:
+                    # Full button with name + version labels
+                    btn_lay = QtWidgets.QVBoxLayout(btn)
+                    btn_lay.setContentsMargins(4, 4, 4, 4)
+                    btn_lay.setSpacing(0)
 
-            grp_lay.addWidget(btn)
+                    name_lbl = QtWidgets.QLabel(
+                        tr(tool["label_key"]))
+                    name_lbl.setAlignment(
+                        QtCore.Qt.AlignCenter)
+                    name_lbl.setStyleSheet(
+                        _NAME_LBL_STYLE.format(
+                            _LBL_COLOR_NORMAL))
+                    name_lbl.setAttribute(
+                        QtCore.Qt.WA_TransparentForMouseEvents)
+                    btn_lay.addWidget(name_lbl)
 
-        root.addWidget(grp)
+                    ver_text = self._get_tool_version(
+                        mod_name, ver_attr)
+                    ver_lbl = QtWidgets.QLabel(ver_text)
+                    ver_lbl.setAlignment(
+                        QtCore.Qt.AlignCenter)
+                    ver_lbl.setStyleSheet(
+                        _VER_LBL_STYLE.format(
+                            _LBL_COLOR_NORMAL))
+                    ver_lbl.setAttribute(
+                        QtCore.Qt.WA_TransparentForMouseEvents)
+                    btn_lay.addWidget(ver_lbl)
+
+                    btn.pressed.connect(
+                        lambda n=name_lbl, v=ver_lbl: (
+                            n.setStyleSheet(
+                                _NAME_LBL_STYLE.format(
+                                    _LBL_COLOR_PRESSED)),
+                            v.setStyleSheet(
+                                _VER_LBL_STYLE.format(
+                                    _LBL_COLOR_PRESSED))))
+                    btn.released.connect(
+                        lambda n=name_lbl, v=ver_lbl: (
+                            n.setStyleSheet(
+                                _NAME_LBL_STYLE.format(
+                                    _LBL_COLOR_NORMAL)),
+                            v.setStyleSheet(
+                                _VER_LBL_STYLE.format(
+                                    _LBL_COLOR_NORMAL))))
+                else:
+                    # Compact button (no version label,
+                    # same style as Close All / Update).
+                    btn.setText(tr(tool["label_key"]))
+                    btn.setStyleSheet(_COMPACT_BTN_STYLE)
+
+                grp_lay.addWidget(btn)
+
+            root.addWidget(grp)
 
         # --- Close All Tools ---
         close_all_btn = QtWidgets.QPushButton(tr("close_all"))
@@ -817,28 +891,49 @@ class QCHubUI(QtWidgets.QWidget):
 
     def _refresh_version_labels(self):
         """Refresh version labels on tool buttons after updates."""
-        grp = self.findChild(QtWidgets.QGroupBox)
-        if grp is None:
-            return
-        grp_lay = grp.layout()
-        for i, tool in enumerate(_TOOLS):
-            if i >= grp_lay.count():
-                break
-            btn = grp_lay.itemAt(i).widget()
-            if btn is None:
+        for grp in self.findChildren(QtWidgets.QGroupBox):
+            grp_lay = grp.layout()
+            if grp_lay is None:
                 continue
-            btn_lay = btn.layout()
-            if btn_lay is None or btn_lay.count() < 2:
-                continue
-            ver_lbl = btn_lay.itemAt(1).widget()
-            if ver_lbl is not None:
-                ver_text = self._get_tool_version(
-                    tool["module"], tool["version_attr"])
-                ver_lbl.setText(ver_text)
+            for idx in range(grp_lay.count()):
+                btn = grp_lay.itemAt(idx).widget()
+                if not isinstance(btn, QtWidgets.QPushButton):
+                    continue
+                btn_lay = btn.layout()
+                if btn_lay is None or btn_lay.count() < 2:
+                    continue
+                name_lbl = btn_lay.itemAt(0).widget()
+                ver_lbl = btn_lay.itemAt(1).widget()
+                if name_lbl is None or ver_lbl is None:
+                    continue
+                label_text = name_lbl.text()
+                for tool in _TOOLS:
+                    if tr(tool["label_key"]) == label_text:
+                        mod_name = tool.get("module")
+                        ver_attr = tool.get("version_attr")
+                        if mod_name and ver_attr:
+                            ver_lbl.setText(
+                                self._get_tool_version(
+                                    mod_name, ver_attr))
+                        break
 
     # ------------------------------------------------------------------
     # Launch
     # ------------------------------------------------------------------
+    def _on_launch_tool(self, tool):
+        """Launch a tool via command callable or module import."""
+        cmd = tool.get("command")
+        if cmd is not None:
+            display_name = tr(tool["label_key"])
+            try:
+                cmd()
+                print(tr("launch_ok", name=display_name))
+            except Exception as e:
+                msg = tr("launch_fail", name=display_name)
+                cmds.warning("{0} ({1})".format(msg, e))
+        else:
+            self._on_launch(tool["module"], tool["label_key"])
+
     def _on_launch(self, module_name, label_key):
         """Import and launch the target tool."""
         display_name = tr(label_key)
