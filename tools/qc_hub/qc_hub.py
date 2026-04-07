@@ -25,8 +25,8 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.5.1"
-__RELEASE_DATE__ = "2026-04-06"
+__VERSION__ = "0.6.0"
+__RELEASE_DATE__ = "2026-04-07"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
@@ -51,6 +51,10 @@ _TOOLS = [
     {"module": "qc_hub", "label_key": "tool_qc_hub",
      "enabled": True, "version_attr": "__VERSION__",
      "window_names": ["qcHubWindow"], "show_button": False},
+    {"module": "qc_tools_plugin", "label_key": "tool_qc_plugin",
+     "enabled": True, "version_attr": "__VERSION__",
+     "window_names": [], "show_button": False,
+     "is_plugin": True},
 ]
 # --- [010] strings ---------------------------------------------------------
 
@@ -79,6 +83,8 @@ _TR = {
     "not_in_manifest":        "{name} is not available for download.",
     "install_ok":             "{name} installed successfully.",
     "install_fail":           "Installation failed: {error}",
+    "tool_qc_plugin":         "QC Tools Plugin",
+    "plugin_unload_fail":     "Failed to unload plugin: {error}",
 }
 
 
@@ -113,6 +119,7 @@ MANIFEST_URL = (
     "https://raw.githubusercontent.com/"
     "ryu-japan/qc-tools-release/main/manifest.json")
 _BACKUP_SUFFIX = ".bak"
+_PLUGIN_EXT = ".py"
 
 
 def _get_or_create_script_path(tool_name):
@@ -135,6 +142,33 @@ def _get_or_create_script_path(tool_name):
     hub_dir = os.path.dirname(os.path.abspath(__file__))
     install_path = os.path.join(hub_dir, tool_name + ".py")
     return install_path, False
+
+
+def _get_plugin_path(tool_name):
+    """Return local plugin .py path and existence flag.
+
+    Searches MAYA_PLUG_IN_PATH first, then falls back to
+    cmds.pluginInfo for a loaded plugin.
+
+    Returns:
+        tuple: (path, exists) where exists is True if the file was found.
+    """
+    plug_in_paths = os.environ.get("MAYA_PLUG_IN_PATH", "")
+    for p in plug_in_paths.split(os.pathsep):
+        if not p:
+            continue
+        candidate = os.path.join(p, tool_name + _PLUGIN_EXT)
+        if os.path.isfile(candidate):
+            return candidate, True
+    # Fallback: query Maya for loaded plugin path
+    try:
+        if cmds.pluginInfo(tool_name, q=True, loaded=True):
+            loaded_path = cmds.pluginInfo(tool_name, q=True, path=True)
+            if loaded_path and os.path.isfile(loaded_path):
+                return loaded_path, True
+    except Exception:
+        pass
+    return None, False
 
 
 def _fetch_manifest():
@@ -166,11 +200,21 @@ def check_updates():
             continue
         remote_ver = entry.get("version", "")
         # Get local version
-        try:
-            mod = __import__(module_name)
-            local_ver = getattr(mod, tool["version_attr"], "")
-        except Exception:
-            local_ver = ""
+        if tool.get("is_plugin"):
+            try:
+                if cmds.pluginInfo(module_name, q=True, loaded=True):
+                    local_ver = cmds.pluginInfo(
+                        module_name, q=True, version=True) or ""
+                else:
+                    local_ver = ""
+            except Exception:
+                local_ver = ""
+        else:
+            try:
+                mod = __import__(module_name)
+                local_ver = getattr(mod, tool["version_attr"], "")
+            except Exception:
+                local_ver = ""
         if remote_ver and remote_ver != local_ver:
             updates.append({
                 "module": module_name,
@@ -183,8 +227,16 @@ def check_updates():
     return updates
 
 
+def _is_plugin(module_name):
+    """Return True if the module is marked as a plugin in _TOOLS."""
+    for tool in _TOOLS:
+        if tool["module"] == module_name:
+            return tool.get("is_plugin", False)
+    return False
+
+
 def apply_update(update_info):
-    """Download, verify, backup and overwrite a tool script.
+    """Download, verify, backup and overwrite a tool script or plugin.
 
     Args:
         update_info: dict with keys module, download_url, sha256.
@@ -194,6 +246,7 @@ def apply_update(update_info):
     module_name = update_info["module"]
     download_url = update_info["download_url"]
     expected_sha = update_info["sha256"]
+    is_plug = _is_plugin(module_name)
 
     # Download
     req = Request(download_url)
@@ -207,8 +260,31 @@ def apply_update(update_info):
             "SHA256 mismatch for {0}: expected {1}, got {2}".format(
                 module_name, expected_sha, actual_sha))
 
-    # Find local script or determine install path
-    local_path, exists = _get_or_create_script_path(module_name)
+    # Resolve local path (plugin vs script)
+    if is_plug:
+        local_path, exists = _get_plugin_path(module_name)
+        if local_path is None:
+            raise RuntimeError(
+                "Plugin path not found for {0}. "
+                "Ensure MAYA_PLUG_IN_PATH is set.".format(module_name))
+    else:
+        local_path, exists = _get_or_create_script_path(module_name)
+
+    # Plugin: unload before overwrite
+    was_loaded = False
+    if is_plug:
+        try:
+            was_loaded = cmds.pluginInfo(
+                module_name, q=True, loaded=True)
+        except Exception:
+            was_loaded = False
+        if was_loaded:
+            try:
+                cmds.unloadPlugin(module_name)
+            except Exception as e:
+                raise RuntimeError(
+                    "Unload failed for {0}: {1}".format(
+                        module_name, e))
 
     if exists:
         # Backup (1 generation, overwrite)
@@ -216,6 +292,12 @@ def apply_update(update_info):
         try:
             shutil.copy2(local_path, bak_path)
         except Exception as e:
+            # Plugin: reload before raising
+            if is_plug and was_loaded:
+                try:
+                    cmds.loadPlugin(local_path)
+                except Exception:
+                    pass
             raise RuntimeError(
                 "Backup failed for {0}: {1}".format(module_name, e))
 
@@ -229,6 +311,12 @@ def apply_update(update_info):
                 shutil.copy2(bak_path, local_path)
             except Exception:
                 pass
+            # Plugin: reload original
+            if is_plug and was_loaded:
+                try:
+                    cmds.loadPlugin(local_path)
+                except Exception:
+                    pass
             raise RuntimeError(
                 "Overwrite failed for {0}: {1}".format(module_name, e))
     else:
@@ -239,6 +327,14 @@ def apply_update(update_info):
         except Exception as e:
             raise RuntimeError(
                 "Install failed for {0}: {1}".format(module_name, e))
+
+    # Plugin: reload after overwrite
+    if is_plug and was_loaded:
+        try:
+            cmds.loadPlugin(local_path)
+        except Exception as e:
+            raise RuntimeError(
+                "Reload failed for {0}: {1}".format(module_name, e))
 # --- [800] ui -----------------------------------------------------------
 
 # Flat-design dark theme for QC tool family UI.
@@ -490,6 +586,12 @@ class UpdateDialog(QtWidgets.QDialog):
             if not res["ok"]:
                 continue
             module_name = res["module"]
+            # Check if this is a plugin
+            if _is_plugin(module_name):
+                # Plugin reload is handled by apply_update
+                # (unload -> overwrite -> reload). No extra
+                # action needed here.
+                continue
             # Close open windows for this tool
             for tool in _TOOLS:
                 if tool["module"] == module_name:
