@@ -26,13 +26,13 @@ import maya.OpenMayaUI as omui
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.17.1"
+__VERSION__ = "0.19.1"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
 HELP_DIALOG_OBJECT_NAME = "sceneCleanupHelpDialog"
 WINDOW_WIDTH = 420
-WINDOW_HEIGHT = 735
+WINDOW_HEIGHT = 820
 
 log = logging.getLogger(WINDOW_TITLE)
 
@@ -314,6 +314,8 @@ _TR = {
     "btn_all_on":            {"en": "All ON",                        "ja": "\u3059\u3079\u3066ON"},
     "btn_all_off":           {"en": "All OFF",                       "ja": "\u3059\u3079\u3066OFF"},
 
+    "btn_reset":             {"en": "Reset",                        "ja": "\u30ea\u30bb\u30c3\u30c8"},
+
     # -- Check items: Geometry (7) --
     "chk_history":           {"en": "Remaining History",             "ja": "\u6b8b\u5b58\u30d2\u30b9\u30c8\u30ea"},
     "chk_transform":         {"en": "Unfreezed Transforms",          "ja": "\u672a\u30d5\u30ea\u30fc\u30ba\u30c8\u30e9\u30f3\u30b9\u30d5\u30a9\u30fc\u30e0"},
@@ -337,15 +339,23 @@ _TR = {
     "chk_referenced_nodes":  {"en": "Referenced Nodes",              "ja": "\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u6b8b\u5b58"},
     "chk_naming_check":      {"en": "Naming Check",                  "ja": "\u547d\u540d\u898f\u5247\u30c1\u30a7\u30c3\u30af"},
 
-    "chk_file_paths":        {"en": "File Paths",                    "ja": "ファイルパスチェック"},
-    "file_paths_scene":      {"en": "Scene",                         "ja": "シーン"},
-    "file_paths_tex":        {"en": "Tex",                           "ja": "テクスチャ"},
-    "file_paths_relative":   {"en": "Relative",                      "ja": "相対パス"},
-    "file_paths_absolute":   {"en": "Absolute",                      "ja": "絶対パス"},
-    "file_paths_missing":    {"en": "Missing File",                  "ja": "欠損ファイル検出"},
+    "chk_file_paths":        {"en": "File Paths",                    "ja": "\u30d5\u30a1\u30a4\u30eb\u30d1\u30b9\u30c1\u30a7\u30c3\u30af"},
+    "file_paths_scene":      {"en": "Scene",                         "ja": "\u30b7\u30fc\u30f3"},
+    "file_paths_tex":        {"en": "Tex",                           "ja": "\u30c6\u30af\u30b9\u30c1\u30e3"},
+    "file_paths_relative":   {"en": "Relative",                      "ja": "\u76f8\u5bfe\u30d1\u30b9"},
+    "file_paths_absolute":   {"en": "Absolute",                      "ja": "\u7d76\u5bfe\u30d1\u30b9"},
+    "file_paths_missing":    {"en": "Missing File",                  "ja": "\u6b20\u640d\u30d5\u30a1\u30a4\u30eb\u691c\u51fa"},
 
-    # -- Naming params --
-    "naming_regex":          {"en": "Regex pattern:",                "ja": "\u6b63\u898f\u8868\u73fe\u30d1\u30bf\u30fc\u30f3:"},
+    # -- Naming params (rule builder) --
+    "naming_add_list":           {"en": "+ Custom",                        "ja": "+ \u6307\u5b9a"},
+    "naming_add_any":            {"en": "+ Any",                         "ja": "+ \u4efb\u610f"},
+    "naming_add_number":         {"en": "+ Number",                      "ja": "+ \u9023\u756a"},
+    "naming_sep_label":          {"en": "sep:",                          "ja": "\u533a\u5207\u308a:"},
+    "naming_digits_placeholder": {"en": "digits",                        "ja": "\u6841\u6570"},
+    "naming_label_list":         {"en": "Custom",                          "ja": "\u6307\u5b9a"},
+    "naming_label_any":          {"en": "Any",                           "ja": "\u4efb\u610f"},
+    "naming_label_number":       {"en": "Number",                        "ja": "\u9023\u756a"},
+    "naming_preview_prefix":     {"en": "\u2713 e.g.",                   "ja": "\u2713 \u4f8b:"},
 
     # -- Scene units params --
     "unit_label":            {"en": "Unit:",                         "ja": "\u5358\u4f4d:"},
@@ -392,12 +402,15 @@ _TR = {
     "detail_upaxis_mismatch":        {"en": "Up-axis: {0} (expected: {1})",        "ja": "Up\u8ef8: {0}\uff08\u671f\u5f85\u5024: {1}\uff09"},
     "detail_unknown_node":           {"en": "Unknown node (origType: {0})",        "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9\uff08\u5143\u30bf\u30a4\u30d7: {0}\uff09"},
     "detail_unknown_node_notype":    {"en": "Unknown node",                        "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9"},
-    "detail_naming_mismatch":        {"en": "Name does not match pattern: {0}",    "ja": "\u547d\u540d\u898f\u5247\u306b\u4e0d\u4e00\u81f4: {0}"},
+    "detail_naming_segment_count":   {"en": "Segments: expected {0}+, got {1}",    "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8\u4e0d\u8db3: {0}\u4ee5\u4e0a\u5fc5\u8981, \u5b9f\u969b {1}"},
+    "detail_naming_list_mismatch":   {"en": "Seg {0}: '{1}' not in [{2}]",        "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8{0}: '{1}' \u304c\u8a31\u53ef\u5916 [{2}]"},
+    "detail_naming_not_number":      {"en": "Seg {0}: '{1}' is not a number",     "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8{0}: '{1}' \u306f\u6570\u5024\u3067\u306f\u306a\u3044"},
+    "detail_naming_digit_mismatch":  {"en": "Seg {0}: expected {1} digits, got {2}", "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8{0}: {1}\u6841\u5fc5\u8981, \u5b9f\u969b{2}\u6841"},
 
-    "detail_wrong_folder":           {"en": "Wrong folder name",                   "ja": "フォルダ名不一致"},
-    "detail_expected_relative":      {"en": "Absolute path detected",              "ja": "絶対パスを検出"},
-    "detail_expected_absolute":      {"en": "Relative path detected",              "ja": "相対パスを検出"},
-    "detail_missing_file":           {"en": "File not found",                      "ja": "ファイル未検出"},
+    "detail_wrong_folder":           {"en": "Wrong folder name",                   "ja": "\u30d5\u30a9\u30eb\u30c0\u540d\u4e0d\u4e00\u81f4"},
+    "detail_expected_relative":      {"en": "Absolute path detected",              "ja": "\u7d76\u5bfe\u30d1\u30b9\u3092\u691c\u51fa"},
+    "detail_expected_absolute":      {"en": "Relative path detected",              "ja": "\u76f8\u5bfe\u30d1\u30b9\u3092\u691c\u51fa"},
+    "detail_missing_file":           {"en": "File not found",                      "ja": "\u30d5\u30a1\u30a4\u30eb\u672a\u691c\u51fa"},
 
     # -- Results --
     "results_summary":       {"en": "{count} issue(s)",              "ja": "{count} \u4ef6"},
@@ -473,6 +486,14 @@ referenced nodes, naming check.</p>
 # [020] utils — Common utilities
 # ---------------------------------------------------------------------------
 
+# Default camera nodes (transforms + shapes) — excluded from scene-wide checks
+DEFAULT_CAMERAS = frozenset([
+    "|persp", "|top", "|front", "|side",
+    "|persp|perspShape", "|top|topShape",
+    "|front|frontShape", "|side|sideShape",
+])
+
+
 def get_maya_main_window():
     """Return the Maya main window as a QWidget."""
     ptr = omui.MQtUtil.mainWindow()
@@ -500,7 +521,8 @@ def collect_transform_nodes():
     Returns:
         list[str]: Long names of transform nodes.
     """
-    return cmds.ls(dag=True, long=True, type="transform") or []
+    all_transforms = cmds.ls(dag=True, long=True, type="transform") or []
+    return [t for t in all_transforms if t not in DEFAULT_CAMERAS]
 
 
 def get_top_nodes(nodes):
@@ -668,9 +690,7 @@ def check_duplicate_names():
     """Check for duplicate short names across all DAG nodes (scene-wide)."""
     results = []
     all_dag = cmds.ls(dag=True, long=True) or []
-    skip_defaults = {"|persp", "|top", "|front", "|side",
-                     "|persp|perspShape", "|top|topShape",
-                     "|front|frontShape", "|side|sideShape"}
+    skip_defaults = DEFAULT_CAMERAS
     short_map = {}  # short_name -> [long_name, ...]
     for ln in all_dag:
         if ln in skip_defaults:
@@ -702,7 +722,7 @@ def check_unused_nodes():
     """
     results = []
     # --- A. Empty groups / transforms with no visible shapes ---
-    skip_cameras = set(["|persp", "|top", "|front", "|side"])
+    skip_cameras = DEFAULT_CAMERAS
     all_transforms = cmds.ls(long=True, type="transform") or []
     for node in all_transforms:
         if node in skip_cameras:
@@ -1109,31 +1129,68 @@ def check_referenced_nodes():
     return results
 
 
-def check_naming_check(targets, regex_pattern=""):
-    """Check node naming against regex pattern.
+def check_naming_check(targets, naming_rules=None, separator="_"):
+    """Check node naming against segment-based rules.
 
-    If regex_pattern is empty, the check is skipped (returns 0 detections).
+    Args:
+        targets: list of node paths to check.
+        naming_rules: list of rule dicts, each with:
+            - mode: "list" | "any" | "number"
+            - values: list of allowed strings (for "list" mode)
+            - digits: int, 0 = any digit count (for "number" mode)
+        separator: string used to split node name into segments.
+
+    If naming_rules is None or empty, the check is skipped.
     """
     results = []
-    if not regex_pattern:
+    if not naming_rules:
         return results
 
-    compiled_re = None
-    try:
-        compiled_re = re.compile(regex_pattern)
-    except re.error:
-        log.warning("Invalid regex pattern: %s", regex_pattern)
-        return results
-
+    num_rules = len(naming_rules)
     for target in targets:
         short_name = target.rsplit("|", 1)[-1]
         if not short_name:
             continue
-        if not compiled_re.search(short_name):
+        segments = short_name.split(separator)
+        if len(segments) < num_rules:
             results.append({
                 "node": target,
-                "detail": tr("detail_naming_mismatch").format(regex_pattern)
+                "detail": tr("detail_naming_segment_count").format(
+                    num_rules, len(segments)),
             })
+            continue
+
+        for i, rule in enumerate(naming_rules):
+            mode = rule.get("mode", "any")
+            seg = segments[i]
+
+            if mode == "any":
+                continue
+            elif mode == "list":
+                allowed = rule.get("values", [])
+                if allowed and seg not in allowed:
+                    results.append({
+                        "node": target,
+                        "detail": tr("detail_naming_list_mismatch").format(
+                            i + 1, seg, ", ".join(allowed)),
+                    })
+                    break
+            elif mode == "number":
+                digits = rule.get("digits", 0)
+                if not seg.isdigit():
+                    results.append({
+                        "node": target,
+                        "detail": tr("detail_naming_not_number").format(
+                            i + 1, seg),
+                    })
+                    break
+                if digits > 0 and len(seg) != digits:
+                    results.append({
+                        "node": target,
+                        "detail": tr("detail_naming_digit_mismatch").format(
+                            i + 1, digits, len(seg)),
+                    })
+                    break
 
     return results
 
@@ -1238,6 +1295,340 @@ class NoScrollComboBox(QtWidgets.QComboBox):
         event.ignore()
 
 
+# ===== NamingRuleBuilder ===================================================
+
+_NAMING_MODES = ["list", "any", "number"]
+
+
+class NamingSegmentBox(QtWidgets.QFrame):
+    """Single segment box in the naming rule builder.
+
+    Each box has a fixed mode ('list', 'any', or 'number') determined
+    at creation time.  Two-row layout:
+      Top row: [mode label] [x button]
+      Bottom row: [content widget]
+    """
+
+    _LABEL_KEYS = {"list": "naming_label_list",
+                   "any": "naming_label_any",
+                   "number": "naming_label_number"}
+
+    def __init__(self, mode="list", on_remove=None, on_changed=None,
+                 parent=None):
+        super(NamingSegmentBox, self).__init__(parent)
+        self._mode = mode if mode in _NAMING_MODES else "list"
+        self._on_remove = on_remove
+        self._on_changed = on_changed
+        self.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.setFixedWidth(94)
+        self.setFixedHeight(58)
+        self.setStyleSheet(
+            "NamingSegmentBox {"
+            "  background-color: transparent;"
+            "}"
+        )
+
+        # Two-row layout: top [label][x], bottom [content]
+        main = QtWidgets.QVBoxLayout(self)
+        main.setContentsMargins(2, 2, 2, 2)
+        main.setSpacing(2)
+
+        # -- Top row: mode label + remove button --
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(2)
+
+        self._mode_label = QtWidgets.QLabel(
+            tr(self._LABEL_KEYS[self._mode]))
+        self._mode_label.setStyleSheet(
+            "color: #888888; font-size: 10px; font-weight: bold;"
+        )
+        top_row.addWidget(self._mode_label)
+        top_row.addStretch()
+
+        self._btn_remove = QtWidgets.QPushButton("✕")
+        self._btn_remove.setProperty("cssClass", "secondary")
+        self._btn_remove.setFixedSize(16, 16)
+        self._btn_remove.setStyleSheet(
+            "QPushButton { font-size: 10px; padding: 0; }"
+        )
+        self._btn_remove.clicked.connect(self._handle_remove)
+        top_row.addWidget(self._btn_remove)
+        main.addLayout(top_row)
+
+        # -- Bottom row: content --
+        self._list_edit = None
+        self._digits_edit = None
+        self._any_label = None
+
+        if self._mode == "list":
+            self._list_edit = QtWidgets.QPlainTextEdit()
+            self._list_edit.setPlaceholderText("chr\nprop")
+            self._list_edit.setMaximumHeight(34)
+            self._list_edit.setStyleSheet(
+                "QPlainTextEdit {"
+                "  background-color: #3c3c3c;"
+                "  color: #e0e0e0;"
+                "  border: 1px solid #555555;"
+                "  border-radius: 4px;"
+                "  font-size: 11px;"
+                "}"
+            )
+            self._list_edit.textChanged.connect(self._notify_changed)
+            main.addWidget(self._list_edit)
+
+        elif self._mode == "any":
+            self._any_label = QtWidgets.QLabel("***")
+            self._any_label.setAlignment(QtCore.Qt.AlignCenter)
+            self._any_label.setStyleSheet(
+                "color: #666666; font-size: 12px; font-weight: bold;"
+                " border: 1px dashed #555555; border-radius: 3px;"
+                " padding: 4px 0;"
+            )
+            main.addWidget(self._any_label, 0, QtCore.Qt.AlignTop)
+
+        elif self._mode == "number":
+            self._digits_edit = QtWidgets.QLineEdit()
+            self._digits_edit.setPlaceholderText(
+                tr("naming_digits_placeholder"))
+            self._digits_edit.setAlignment(QtCore.Qt.AlignCenter)
+            self._digits_edit.setStyleSheet(
+                "QLineEdit {"
+                "  background-color: #3c3c3c;"
+                "  color: #e0e0e0;"
+                "  border: 1px solid #555555;"
+                "  border-radius: 4px;"
+                "  font-size: 11px;"
+                "}"
+            )
+            self._digits_edit.setValidator(
+                QtGui.QIntValidator(1, 9))
+            self._digits_edit.textChanged.connect(self._notify_changed)
+            main.addWidget(self._digits_edit, 0, QtCore.Qt.AlignTop)
+
+    def _handle_remove(self):
+        if self._on_remove:
+            self._on_remove(self)
+
+    def _notify_changed(self):
+        if self._on_changed:
+            self._on_changed()
+
+    def get_mode(self):
+        """Return the fixed mode string."""
+        return self._mode
+
+    def get_rule(self):
+        """Return rule dict for this segment."""
+        if self._mode == "list" and self._list_edit is not None:
+            text = self._list_edit.toPlainText().strip()
+            values = [v.strip() for v in text.split("\n") if v.strip()]
+            return {"mode": "list", "values": values, "digits": 0}
+        elif self._mode == "number":
+            text = self._digits_edit.text().strip() if self._digits_edit else ""
+            digits = int(text) if text.isdigit() and int(text) > 0 else 0
+            return {"mode": "number", "values": [], "digits": digits}
+        return {"mode": "any", "values": [], "digits": 0}
+
+    def retranslate(self):
+        """Update labels for current language."""
+        self._mode_label.setText(tr(self._LABEL_KEYS[self._mode]))
+        if self._digits_edit is not None:
+            self._digits_edit.setPlaceholderText(
+                tr("naming_digits_placeholder"))
+
+    def reset(self):
+        """Reset content (mode stays fixed)."""
+        if self._list_edit is not None:
+            self._list_edit.clear()
+        if self._digits_edit is not None:
+            self._digits_edit.clear()
+
+
+class NamingRuleBuilder(QtWidgets.QWidget):
+    """Build naming rules as connected segment boxes."""
+
+    def __init__(self, parent=None):
+        super(NamingRuleBuilder, self).__init__(parent)
+        self._boxes = []
+
+        main_lay = QtWidgets.QVBoxLayout(self)
+        main_lay.setContentsMargins(0, 0, 0, 0)
+        main_lay.setSpacing(4)
+
+        # Top row: [+ List] [+ Any] [+ Number] on left, sep: [_] on right
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setSpacing(4)
+        self._btn_add_list = QtWidgets.QPushButton(tr("naming_add_list"))
+        self._btn_add_list.setProperty("cssClass", "secondary")
+        self._btn_add_list.clicked.connect(lambda: self._add_box("list"))
+        top_row.addWidget(self._btn_add_list)
+        self._btn_add_any = QtWidgets.QPushButton(tr("naming_add_any"))
+        self._btn_add_any.setProperty("cssClass", "secondary")
+        self._btn_add_any.clicked.connect(lambda: self._add_box("any"))
+        top_row.addWidget(self._btn_add_any)
+        self._btn_add_number = QtWidgets.QPushButton(tr("naming_add_number"))
+        self._btn_add_number.setProperty("cssClass", "secondary")
+        self._btn_add_number.clicked.connect(lambda: self._add_box("number"))
+        top_row.addWidget(self._btn_add_number)
+        top_row.addSpacing(12)
+        self._sep_label = QtWidgets.QLabel(tr("naming_sep_label"))
+        self._sep_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self._sep_edit = QtWidgets.QLineEdit("_")
+        self._sep_edit.setFixedWidth(30)
+        self._sep_edit.setAlignment(QtCore.Qt.AlignCenter)
+        self._sep_edit.setStyleSheet("font-size: 11px;")
+        self._sep_edit.textChanged.connect(self._update_preview)
+        top_row.addWidget(self._sep_label)
+        top_row.addWidget(self._sep_edit)
+        top_row.addStretch()
+        main_lay.addLayout(top_row)
+
+        # Scrollable box area
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setFixedHeight(76)
+        self._box_container = QtWidgets.QWidget()
+        self._box_container.setFixedHeight(62)
+        self._box_container.setStyleSheet(
+            "background-color: #353535;"
+        )
+        self._box_layout = QtWidgets.QHBoxLayout(self._box_container)
+        self._box_layout.setContentsMargins(0, 0, 0, 0)
+        self._box_layout.setSpacing(0)
+        self._box_layout.addStretch()
+        scroll.setWidget(self._box_container)
+        main_lay.addWidget(scroll)
+
+        # Preview label
+        self._preview_label = QtWidgets.QLabel("")
+        self._preview_label.setStyleSheet(
+            "color: #44aa44; font-size: 11px; padding: 0 2px;"
+        )
+        self._preview_label.setVisible(False)
+        main_lay.addWidget(self._preview_label)
+
+    def _add_box(self, mode="list"):
+        """Add a new segment box with the given mode."""
+        box = NamingSegmentBox(
+            mode=mode,
+            on_remove=self._remove_box,
+            on_changed=self._update_preview,
+        )
+        self._boxes.append(box)
+        self._refresh_layout()
+        self._update_preview()
+
+    def _remove_box(self, box):
+        """Remove a segment box."""
+        if box in self._boxes:
+            self._boxes.remove(box)
+            box.setParent(None)
+            box.deleteLater()
+            self._refresh_layout()
+            self._update_preview()
+
+    def _refresh_layout(self):
+        """Rebuild box layout from self._boxes."""
+        while self._box_layout.count():
+            item = self._box_layout.takeAt(0)
+            w = item.widget()
+            if w and getattr(w, "_is_sep", False):
+                w.setParent(None)
+                w.deleteLater()
+
+        sep_text = self._sep_edit.text() or "_"
+        for i, box in enumerate(self._boxes):
+            if i > 0:
+                sep = QtWidgets.QLabel(sep_text)
+                sep.setStyleSheet(
+                    "color: #888888; font-size: 14px;"
+                    " font-weight: bold; padding: 0 2px;"
+                )
+                sep._is_sep = True
+                self._box_layout.addWidget(sep)
+            self._box_layout.addWidget(box)
+        self._box_layout.addStretch()
+
+    def _update_preview(self):
+        """Update the OK-pattern preview label."""
+        if not self._boxes:
+            self._preview_label.setVisible(False)
+            return
+        self._preview_label.setVisible(True)
+        sep = self._sep_edit.text() or "_"
+
+        # Collect per-box values for preview
+        box_values = []
+        for box in self._boxes:
+            rule = box.get_rule()
+            if rule["mode"] == "list":
+                values = rule["values"]
+                box_values.append(values if values else ["???"])
+            elif rule["mode"] == "any":
+                box_values.append(["***"])
+            elif rule["mode"] == "number":
+                d = rule["digits"]
+                box_values.append(["0" * d if d > 0 else "###"])
+            else:
+                box_values.append(["***"])
+
+        # Generate examples from list combinations (max 3)
+        examples = []
+        if box_values:
+            list_box = None
+            for i, bv in enumerate(box_values):
+                if len(bv) > 1:
+                    list_box = i
+                    break
+            if list_box is not None:
+                for val in box_values[list_box][:3]:
+                    parts = []
+                    for j, bv in enumerate(box_values):
+                        if j == list_box:
+                            parts.append(val)
+                        else:
+                            parts.append(bv[0])
+                    examples.append(sep.join(parts))
+            else:
+                examples.append(sep.join(bv[0] for bv in box_values))
+
+        self._preview_label.setText(
+            tr("naming_preview_prefix") + " " + ", ".join(examples)
+        )
+
+    def get_rules(self):
+        """Return list of rule dicts."""
+        return [b.get_rule() for b in self._boxes]
+
+    def get_separator(self):
+        """Return separator string."""
+        return self._sep_edit.text() or "_"
+
+    def reset(self):
+        """Remove all boxes, reset separator."""
+        for box in self._boxes:
+            box.setParent(None)
+            box.deleteLater()
+        self._boxes = []
+        self._refresh_layout()
+        self._sep_edit.setText("_")
+        self._update_preview()
+
+    def retranslate(self):
+        """Update labels for current language."""
+        self._btn_add_list.setText(tr("naming_add_list"))
+        self._btn_add_any.setText(tr("naming_add_any"))
+        self._btn_add_number.setText(tr("naming_add_number"))
+        self._sep_label.setText(tr("naming_sep_label"))
+        for box in self._boxes:
+            box.retranslate()
+        self._update_preview()
+
+
 # ===== CheckCategory =================================================
 
 class CheckCategory(QtWidgets.QWidget):
@@ -1299,8 +1690,6 @@ class CheckCategory(QtWidgets.QWidget):
 
     def reset_defaults(self, defaults_list):
         """Reset checkboxes to default states.
-
-        NOTE: Currently unused — kept for potential future use.
 
         Args:
             defaults_list: list of (key, default_on) tuples.
@@ -1644,6 +2033,13 @@ _CANONICAL_ORDER = (
     + [k for k, _, _, _ in _CHECK_ITEMS_SCENE_ENV]
 )
 
+_PARAM_DEFAULTS = {
+    "scene_units":  {"unit": 0, "upaxis": 0},
+    "naming_check": {"rules": [], "separator": "_"},
+    "file_paths":   {"scene": "scenes", "tex": "sourceimages",
+                     "type": "relative", "missing": True},
+}
+
 
 class MainWindow(QtWidgets.QDialog):
     """Scene Cleanup Tools main window."""
@@ -1675,13 +2071,14 @@ class MainWindow(QtWidgets.QDialog):
 
         # --- Top bar --------------------------------------------------------
         top_bar = QtWidgets.QHBoxLayout()
-        self._lbl_lang = QtWidgets.QLabel(tr("lang_label"))
-        top_bar.addWidget(self._lbl_lang)
-        self._lang_combo = NoScrollComboBox()
-        self._lang_combo.addItems(["English", "\u65e5\u672c\u8a9e"])
-        self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        self._lang_combo.setCurrentIndex(1 if _current_lang == "ja" else 0)
-        top_bar.addWidget(self._lang_combo)
+        self._lang_toggle = QtWidgets.QPushButton(tr("lang_en_label") if _current_lang == "ja" else tr("lang_ja_label"))
+        self._lang_toggle.setCheckable(True)
+        self._lang_toggle.setChecked(_current_lang == "ja")
+        self._lang_toggle.setFixedWidth(80)
+        self._lang_toggle.setProperty("cssClass", "prep")
+        self._lang_toggle.clicked.connect(self._on_language_toggled)
+        # REMOVED: self._lang_combo.addItems(["English", "\u65e5\u672c\u8a9e"])
+        top_bar.addWidget(self._lang_toggle)
         top_bar.addStretch()
         self._btn_howto = QtWidgets.QPushButton(tr("btn_howto"))
         self._btn_howto.setProperty("cssClass", "prep")
@@ -1730,7 +2127,11 @@ class MainWindow(QtWidgets.QDialog):
         self._btn_all_off.clicked.connect(lambda: self._set_all_checks(False))
         btn_row.addWidget(self._btn_all_on)
         btn_row.addWidget(self._btn_all_off)
-        btn_row.addStretch()
+        btn_row.addSpacing(16)
+        self._btn_reset = QtWidgets.QPushButton(tr("btn_reset"))
+        self._btn_reset.setProperty("cssClass", "prep")
+        self._btn_reset.clicked.connect(self._reset_to_defaults)
+        btn_row.addWidget(self._btn_reset)
         root.addLayout(btn_row)
 
         # --- Check button ---------------------------------------------------
@@ -1783,18 +2184,13 @@ class MainWindow(QtWidgets.QDialog):
         container = QtWidgets.QWidget()
 
         if key == "naming_check":
-            layout = QtWidgets.QHBoxLayout(container)
+            layout = QtWidgets.QVBoxLayout(container)
             layout.setContentsMargins(8, 0, 0, 0)
             layout.setSpacing(4)
-            lbl = QtWidgets.QLabel(tr("naming_regex"))
-            regex_edit = QtWidgets.QLineEdit()
-            regex_edit.setPlaceholderText("e.g. ^[A-Za-z_][A-Za-z0-9_]*$")
-            regex_edit.setMinimumWidth(120)
-            layout.addWidget(lbl)
-            layout.addWidget(regex_edit, 1)
+            builder = NamingRuleBuilder()
+            layout.addWidget(builder)
             self._param_widgets[key] = {
-                "label": lbl,
-                "regex": regex_edit,
+                "builder": builder,
             }
 
         elif key == "scene_units":
@@ -1870,6 +2266,34 @@ class MainWindow(QtWidgets.QDialog):
         self._cat_geometry.set_all(checked)
         self._cat_unused.set_all(checked)
         self._cat_scene_env.set_all(checked)
+
+    def _reset_to_defaults(self):
+        """Reset all check states and params to defaults."""
+        for cat, items in [
+            (self._cat_geometry,  _CHECK_ITEMS_GEOMETRY),
+            (self._cat_unused,    _CHECK_ITEMS_UNUSED),
+            (self._cat_scene_env, _CHECK_ITEMS_SCENE_ENV),
+        ]:
+            cat.reset_defaults([(k, d) for k, _, d, _ in items])
+        pw = self._param_widgets.get("scene_units")
+        if pw:
+            pw["combo_unit"].setCurrentIndex(
+                _PARAM_DEFAULTS["scene_units"]["unit"])
+            pw["combo_axis"].setCurrentIndex(
+                _PARAM_DEFAULTS["scene_units"]["upaxis"])
+        pw = self._param_widgets.get("naming_check")
+        if pw:
+            pw["builder"].reset()
+        pw = self._param_widgets.get("file_paths")
+        if pw:
+            d = _PARAM_DEFAULTS["file_paths"]
+            pw["edit_scene"].setText(d["scene"])
+            pw["edit_tex"].setText(d["tex"])
+            if d["type"] == "relative":
+                pw["rb_relative"].setChecked(True)
+            else:
+                pw["rb_absolute"].setChecked(True)
+            pw["cb_missing"].setChecked(d["missing"])
 
     # === Status / Progress ==================================================
 
@@ -1949,7 +2373,9 @@ class MainWindow(QtWidgets.QDialog):
         params = {}
         pw = self._param_widgets.get("naming_check")
         if pw:
-            params["naming_regex"] = pw["regex"].text()
+            builder = pw["builder"]
+            params["naming_rules"] = builder.get_rules()
+            params["naming_separator"] = builder.get_separator()
         pw = self._param_widgets.get("scene_units")
         if pw:
             params["expected_unit"] = pw["combo_unit"].currentText().lower()
@@ -2029,9 +2455,10 @@ class MainWindow(QtWidgets.QDialog):
 
     # === Language switching ==================================================
 
-    def _on_language_changed(self, index):
-        lang = "ja" if index == 1 else "en"
+    def _on_language_toggled(self, checked):
+        lang = "ja" if checked else "en"
         set_language(lang)
+        self._lang_toggle.setText(tr("lang_en_label") if checked else tr("lang_ja_label"))
         self._retranslate_ui()
 
     def _retranslate_ui(self):
@@ -2040,8 +2467,8 @@ class MainWindow(QtWidgets.QDialog):
         self._btn_check.setText(tr("btn_check"))
         self._set_status(tr("status_ready"), "ready")
 
-        # Language label + send report
-        self._lbl_lang.setText(tr("lang_label"))
+        # Language toggle + send report
+        self._lang_toggle.setText(tr("lang_en_label") if _current_lang == "ja" else tr("lang_ja_label"))
         self._btn_send_report.setText(tr("btn_send_report"))
 
         # QGroupBox titles
@@ -2059,11 +2486,12 @@ class MainWindow(QtWidgets.QDialog):
 
         self._btn_all_on.setText(tr("btn_all_on"))
         self._btn_all_off.setText(tr("btn_all_off"))
+        self._btn_reset.setText(tr("btn_reset"))
 
         # Param widgets
         pw = self._param_widgets.get("naming_check")
         if pw:
-            pw["label"].setText(tr("naming_regex"))
+            pw["builder"].retranslate()
         pw = self._param_widgets.get("scene_units")
         if pw:
             pw["label_unit"].setText(tr("unit_label"))
@@ -2200,7 +2628,8 @@ class QCWorker(QtCore.QObject):
                 transforms = collect_transform_nodes()
                 return func(
                     transforms,
-                    regex_pattern=self._params.get("naming_regex", ""),
+                    naming_rules=self._params.get("naming_rules", []),
+                    separator=self._params.get("naming_separator", "_"),
                 )
             else:
                 return func(self._targets)
