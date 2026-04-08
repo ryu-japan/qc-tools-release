@@ -26,7 +26,7 @@ import maya.OpenMayaUI as omui
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.19.1"
+__VERSION__ = "0.20.0"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
@@ -2455,7 +2455,8 @@ class MainWindow(QtWidgets.QDialog):
 
     # === Language switching ==================================================
 
-    def _on_language_toggled(self, checked):
+    def _on_language_toggled(self):
+        checked = self._lang_toggle.isChecked()
         lang = "ja" if checked else "en"
         set_language(lang)
         self._lang_toggle.setText(tr("lang_en_label") if checked else tr("lang_ja_label"))
