@@ -39,7 +39,7 @@ _url_quote = url_quote
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.31.0"
+__VERSION__ = "0.31.1"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
@@ -2354,7 +2354,7 @@ class HelpDialog(QtWidgets.QDialog):
     def _render_readme(self, markdown_text):
         """Render README markdown via marked.js template."""
         try:
-            encoded = _url_quote(markdown_text.encode("utf-8"), safe="")
+            encoded = _url_quote(markdown_text.encode("utf-8"), safe=b"")
             html = (_HELP_RENDER_TEMPLATE
                     .replace("__CDN_URL__", _MARKED_CDN)
                     .replace("__ENCODED_MD__", encoded))
