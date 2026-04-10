@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Scene Cleanup Tools - Maya scene cleanup checker.
 
-Checks 18 items related to scene state, structure and settings.
+Checks 15 items related to scene state, structure and settings.
 Compatible with Maya 2018+ (Python 2.7 / 3, PySide2 / PySide6).
 """
 from __future__ import absolute_import, division, print_function, unicode_literals
@@ -12,6 +12,7 @@ import re
 import logging
 import tempfile
 import atexit
+import fnmatch
 from functools import partial
 
 try:
@@ -23,16 +24,76 @@ except ImportError:
 
 import maya.cmds as cmds
 import maya.OpenMayaUI as omui
+
+import webbrowser
+
+try:
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+    from urllib.parse import quote as url_quote
+except ImportError:
+    from urllib2 import urlopen, Request, URLError
+    from urllib import quote as url_quote
+
+_url_quote = url_quote
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.20.0"
+__VERSION__ = "0.31.0"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
 HELP_DIALOG_OBJECT_NAME = "sceneCleanupHelpDialog"
 WINDOW_WIDTH = 420
-WINDOW_HEIGHT = 820
+WINDOW_HEIGHT = 660
+
+# Feedback form constants (Google Forms)
+_FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdYhrFiuiYJyLVBzRDR6pPVQihj1y8PsHt3Mg6ZnY5THUGGyQ/viewform"
+_FEEDBACK_ENTRY_ID = "entry.1931722805"
+_FEEDBACK_ENTRY_TOOL_NAME = "entry.1298102635"
+_FEEDBACK_ENTRY_MAYA_VERSION = "entry.1146110608"
+_URL_MAX_LENGTH = 8000
+
+# Fix capability: key -> reversible (True=undo-safe, False=irreversible)
+# Items not in this dict are not fixable.
+_FIX_CAPABLE = {
+    "transform": True,
+    "instances": True,
+    "smooth_preview": True,
+    "intermediate_objects": True,
+    "unused_nodes": True,
+    "unused_mat": True,
+    "unused_layers": True,
+    "empty_sets": True,
+    "unknown_nodes": True,
+    "history": False,
+    "vertex_tweaks": False,
+    "namespaces": False,
+    "referenced_nodes": False,
+}
+
+# Risk levels for Fix items: high=irreversible/destructive, medium=conditional, low=safe
+_RISK_HIGH = "high"
+_RISK_MEDIUM = "medium"
+_RISK_LOW = "low"
+
+_RISK_LEVELS = {
+    "history":              _RISK_HIGH,
+    "referenced_nodes":     _RISK_HIGH,
+    "unknown_nodes":        _RISK_HIGH,
+    "vertex_tweaks":        _RISK_MEDIUM,
+    "transform":            _RISK_MEDIUM,
+    "instances":            _RISK_MEDIUM,
+    "intermediate_objects": _RISK_MEDIUM,
+    "unused_nodes":         _RISK_MEDIUM,
+    "smooth_preview":       _RISK_LOW,
+    "unused_mat":           _RISK_LOW,
+    "unused_layers":        _RISK_LOW,
+    "empty_sets":           _RISK_LOW,
+    "namespaces":           _RISK_LOW,
+}
+
+
 
 log = logging.getLogger(WINDOW_TITLE)
 
@@ -242,11 +303,11 @@ _QSS = (
     "QWidget#scrollContent {"
     "  background-color: #2b2b2b;"
     "}"
-    "QMessageBox QPushButton {"
-    "  min-width: 80px;"
-    "}"
     "QMessageBox QLabel {"
     "  font-size: 14px;"
+    "}"
+    "QMessageBox QPushButton {"
+    "  min-width: 80px;"
     "}"
     "QPushButton[cssClass=\"secondary\"] {"
     "  font-weight: normal;"
@@ -316,14 +377,12 @@ _TR = {
 
     "btn_reset":             {"en": "Reset",                        "ja": "\u30ea\u30bb\u30c3\u30c8"},
 
-    # -- Check items: Geometry (7) --
+    # -- Check items: Geometry (5) --
     "chk_history":           {"en": "Remaining History",             "ja": "\u6b8b\u5b58\u30d2\u30b9\u30c8\u30ea"},
     "chk_transform":         {"en": "Unfreezed Transforms",          "ja": "\u672a\u30d5\u30ea\u30fc\u30ba\u30c8\u30e9\u30f3\u30b9\u30d5\u30a9\u30fc\u30e0"},
     "chk_vertex_tweaks":     {"en": "Vertex Tweaks",                 "ja": "\u9802\u70b9Tweaks\u6b8b\u7559"},
     "chk_instances":         {"en": "Remaining Instances",           "ja": "\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9\u6b8b\u5b58"},
     "chk_smooth_preview":    {"en": "Smooth Mesh Preview",           "ja": "\u30b9\u30e0\u30fc\u30b9\u30e1\u30c3\u30b7\u30e5\u30d7\u30ec\u30d3\u30e5\u30fc"},
-    "chk_shape_suffix":      {"en": "Shape Suffix",                  "ja": "Shape Suffix \u30c1\u30a7\u30c3\u30af"},
-    "chk_duplicate_names":   {"en": "Duplicate Names",               "ja": "\u91cd\u8907\u540d\u30c1\u30a7\u30c3\u30af"},
 
     # -- Check items: Unused (6) --
     "chk_unused_nodes":      {"en": "Empty Groups / Empty Shapes",               "ja": "\u7a7a\u30b0\u30eb\u30fc\u30d7 / \u7a7a\u30b7\u30a7\u30a4\u30d7"},
@@ -333,11 +392,10 @@ _TR = {
     "chk_empty_sets":        {"en": "Empty Object Sets",              "ja": "\u7a7a\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u30bb\u30c3\u30c8"},
     "chk_namespaces":        {"en": "Empty Namespaces",              "ja": "\u7a7a\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9"},
 
-    # -- Check items: Scene Environment (5) --
+    # -- Check items: Scene Environment (4) --
     "chk_scene_units":       {"en": "Scene Units / Up-Axis",         "ja": "\u30b7\u30fc\u30f3\u5358\u4f4d / Up\u8ef8"},
     "chk_unknown_nodes":     {"en": "Unknown Nodes",                 "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9"},
     "chk_referenced_nodes":  {"en": "Referenced Nodes",              "ja": "\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u6b8b\u5b58"},
-    "chk_naming_check":      {"en": "Naming Check",                  "ja": "\u547d\u540d\u898f\u5247\u30c1\u30a7\u30c3\u30af"},
 
     "chk_file_paths":        {"en": "File Paths",                    "ja": "\u30d5\u30a1\u30a4\u30eb\u30d1\u30b9\u30c1\u30a7\u30c3\u30af"},
     "file_paths_scene":      {"en": "Scene",                         "ja": "\u30b7\u30fc\u30f3"},
@@ -345,17 +403,6 @@ _TR = {
     "file_paths_relative":   {"en": "Relative",                      "ja": "\u76f8\u5bfe\u30d1\u30b9"},
     "file_paths_absolute":   {"en": "Absolute",                      "ja": "\u7d76\u5bfe\u30d1\u30b9"},
     "file_paths_missing":    {"en": "Missing File",                  "ja": "\u6b20\u640d\u30d5\u30a1\u30a4\u30eb\u691c\u51fa"},
-
-    # -- Naming params (rule builder) --
-    "naming_add_list":           {"en": "+ Custom",                        "ja": "+ \u6307\u5b9a"},
-    "naming_add_any":            {"en": "+ Any",                         "ja": "+ \u4efb\u610f"},
-    "naming_add_number":         {"en": "+ Number",                      "ja": "+ \u9023\u756a"},
-    "naming_sep_label":          {"en": "sep:",                          "ja": "\u533a\u5207\u308a:"},
-    "naming_digits_placeholder": {"en": "digits",                        "ja": "\u6841\u6570"},
-    "naming_label_list":         {"en": "Custom",                          "ja": "\u6307\u5b9a"},
-    "naming_label_any":          {"en": "Any",                           "ja": "\u4efb\u610f"},
-    "naming_label_number":       {"en": "Number",                        "ja": "\u9023\u756a"},
-    "naming_preview_prefix":     {"en": "\u2713 e.g.",                   "ja": "\u2713 \u4f8b:"},
 
     # -- Scene units params --
     "unit_label":            {"en": "Unit:",                         "ja": "\u5358\u4f4d:"},
@@ -369,48 +416,96 @@ _TR = {
     "btn_copy_report":       {"en": "Copy Report",                   "ja": "\u30ec\u30dd\u30fc\u30c8\u3092\u30b3\u30d4\u30fc"},
     "btn_send_report":       {"en": "Send Report",                   "ja": "\u30ec\u30dd\u30fc\u30c8\u3092\u9001\u4fe1"},
 
+    # -- Fix UI --
+    "btn_fix_selected":      {"en": "Fix Selected",                   "ja": "選択項目を修正"},
+    "fix_confirm_title":     {"en": "Confirm Fix",                    "ja": "修正の確認"},
+    "fix_confirm_msg":       {"en": "Fix {count} item(s). Proceed?",  "ja": "{count} 件を修正します。実行しますか？"},
+    "fix_result_title":      {"en": "Fix Result",                     "ja": "修正結果"},
+    "fix_result_success":    {"en": "Successfully fixed {count} item(s).","ja": "{count} 件を修正しました。"},
+    "fix_result_partial":    {"en": "Fixed {fixed}, {failed} failed.","ja": "{fixed} 件を修正、{failed} 件が失敗しました。"},
+    "fix_result_all_failed": {"en": "Fix failed for all {count} item(s).","ja": "{count} 件すべて修正に失敗しました。"},
+    "fix_confirm_irreversible_warn": {"en": "⚠ This operation cannot be undone.","ja": "⚠ この操作は元に戻せません。"},
+
+    # -- Preflight --
+    "preflight_title":       {"en": "Preflight Check",              "ja": "プリチェック"},
+    "preflight_warn_header": {"en": "⚠ The following risks were detected:", "ja": "⚠ 以下のリスクを検出:"},
+    "preflight_proceed":     {"en": "Proceed anyway?",              "ja": "それでも実行しますか？"},
+    "preflight_history_blendshape": {"en": "blendShape {count} — targets will be destroyed", "ja": "blendShape {count} 件 — ターゲットが失われます"},
+    "preflight_history_skincluster": {"en": "skinCluster {count} — skin weights will be lost", "ja": "skinCluster {count} 件 — スキンウェイトが失われます"},
+    "preflight_history_deformer":   {"en": "Deformer {count} — deformation data will be lost", "ja": "デフォーマ {count} 件 — 変形情報が失われます"},
+    "preflight_history_dagpose":     {"en": "bindPose {count} — Go to Bind Pose will stop working", "ja": "bindPose {count} 件 — Go to Bind Pose が機能しなくなります"},
+    "preflight_unknown_plugin":     {"en": "Unloaded plugin {count} — may be unrecoverable ({plugins})", "ja": "未ロードプラグイン {count} 件 — 復元不可の可能性があります ({plugins})"},
+    "preflight_ref_namespace":      {"en": "Reference {count} — will be imported into scene", "ja": "リファレンス {count} 件 — シーンにインポートされます"},
+    "preflight_no_risk":            {"en": "No risky nodes were detected.", "ja": "リスクのあるノードは検出されませんでした。"},
+
     # -- Status --
     "status_ready":          {"en": "Standby",                       "ja": "\u5f85\u6a5f\u4e2d"},
     "status_running":        {"en": "Checking... {cur}/{total}",     "ja": "\u30c1\u30a7\u30c3\u30af\u4e2d... {cur}/{total}"},
     "status_done":           {"en": "Done. {issues} issue(s) found.","ja": "\u5b8c\u4e86\u3002{issues} \u4ef6\u306e\u554f\u984c\u3092\u691c\u51fa\u3002"},
     "status_cancelled":      {"en": "Cancelled.",                    "ja": "\u30ad\u30e3\u30f3\u30bb\u30eb\u3057\u307e\u3057\u305f\u3002"},
+    "report_form_opened":    {"en": "Report copied & form opened.",  "ja": "レポートをコピーし、フォームを開きました。"},
+    "report_url_too_long":   {"en": "Report too long for URL. Copied to clipboard -- please paste manually.",
+                              "ja": "レポートがURL上限を超えました。クリップボードにコピー済み -- 手動で貼り付けてください。"},
+    "report_form_not_configured": {"en": "Feedback form is not configured.", "ja": "フィードバックフォームが未設定です。"},
+    "report_empty":          {"en": "No check results to report.",   "ja": "レポートするチェック結果がありません。"},
     "report_copied":         {"en": "Report copied to clipboard.",   "ja": "\u30ec\u30dd\u30fc\u30c8\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f\u3002"},
 
     # -- Detail messages --
-    "detail_unused_display_layer":  {"en": "Unused display layer",              "ja": "\u672a\u4f7f\u7528\u306e\u30c7\u30a3\u30b9\u30d7\u30ec\u30a4\u30ec\u30a4\u30e4\u30fc"},
-    "detail_unused_render_layer":   {"en": "Unused render layer",               "ja": "\u672a\u4f7f\u7528\u306e\u30ec\u30f3\u30c0\u30fc\u30ec\u30a4\u30e4\u30fc"},
-    "detail_unused_animation_layer":{"en": "Unused animation layer",            "ja": "\u672a\u4f7f\u7528\u306e\u30a2\u30cb\u30e1\u30fc\u30b7\u30e7\u30f3\u30ec\u30a4\u30e4\u30fc"},
+    "detail_unused_display_layer":  {"en": "Unused display layer",              "ja": "\u672a\u4f7f\u7528\u30c7\u30a3\u30b9\u30d7\u30ec\u30a4\u30ec\u30a4\u30e4\u30fc"},
+    "detail_unused_render_layer":   {"en": "Unused render layer",               "ja": "\u672a\u4f7f\u7528\u30ec\u30f3\u30c0\u30fc\u30ec\u30a4\u30e4\u30fc"},
+    "detail_unused_animation_layer":{"en": "Unused animation layer",            "ja": "\u672a\u4f7f\u7528\u30a2\u30cb\u30e1\u30fc\u30b7\u30e7\u30f3\u30ec\u30a4\u30e4\u30fc"},
     "detail_loaded":                {"en": "Loaded: {0}",                       "ja": "\u30ed\u30fc\u30c9\u6e08\u307f: {0}"},
     "detail_unloaded":              {"en": "Unloaded: {0}",                     "ja": "\u672a\u30ed\u30fc\u30c9: {0}"},
     "detail_ref_path_unknown":      {"en": "Reference node (path unknown)",     "ja": "\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\uff08\u30d1\u30b9\u4e0d\u660e\uff09"},
     "detail_vertex_tweaks":          {"en": "{0}/{1} vertices have tweaks",       "ja": "{0}/{1} \u9802\u70b9\u306bTweaks\u3042\u308a"},
-    "detail_duplicate_name":         {"en": "Duplicate name ({0} nodes)",         "ja": "\u91cd\u8907\u540d\uff08{0} \u30ce\u30fc\u30c9\uff09"},
-    "detail_shape_suffix":           {"en": "Suffix mismatch",                    "ja": "\u30b5\u30d5\u30a3\u30c3\u30af\u30b9\u4e0d\u4e00\u81f4"},
-    "detail_history":                {"en": "Has construction history",            "ja": "\u30d2\u30b9\u30c8\u30ea\u3042\u308a"},
-    "detail_transform":              {"en": "Not frozen",                          "ja": "\u672a\u30d5\u30ea\u30fc\u30ba"},
-    "detail_instances":              {"en": "{0} instanced shape(s)",              "ja": "\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9 {0}\u4ef6"},
-    "detail_smooth_preview":         {"en": "Smooth preview enabled",              "ja": "\u30b9\u30e0\u30fc\u30b9\u30d7\u30ec\u30d3\u30e5\u30fc ON"},
-    "detail_empty_group":            {"en": "Empty group",                         "ja": "\u7a7a\u30b0\u30eb\u30fc\u30d7"},
-    "detail_empty_mesh":             {"en": "Empty mesh",                          "ja": "\u7a7a\u30e1\u30c3\u30b7\u30e5"},
-    "detail_intermediate":           {"en": "Intermediate object exists",          "ja": "\u4e2d\u9593\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3042\u308a"},
-    "detail_unused_mat":             {"en": "Unused material ({0})",               "ja": "\u672a\u4f7f\u7528\u30de\u30c6\u30ea\u30a2\u30eb ({0})"},
-    "detail_unused_texture":         {"en": "Unused texture ({0})",                "ja": "\u672a\u4f7f\u7528\u30c6\u30af\u30b9\u30c1\u30e3 ({0})"},
-    "detail_unused_utility":         {"en": "Unused utility ({0})",                "ja": "\u672a\u4f7f\u7528\u30e6\u30fc\u30c6\u30a3\u30ea\u30c6\u30a3 ({0})"},
-    "detail_empty_set":              {"en": "Empty set",                           "ja": "\u7a7a\u30bb\u30c3\u30c8"},
-    "detail_empty_namespace":        {"en": "Empty namespace",                     "ja": "\u7a7a\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9"},
+    "detail_history":                {"en": "Construction history remains",       "ja": "\u30d2\u30b9\u30c8\u30ea\u3042\u308a"},
+    "detail_transform":              {"en": "Transform not frozen",               "ja": "\u672a\u30d5\u30ea\u30fc\u30ba"},
+    "detail_instances":              {"en": "{0} instanced shapes",               "ja": "\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9 {0}\u4ef6"},
+    "detail_smooth_preview":         {"en": "Smooth preview enabled",             "ja": "\u30b9\u30e0\u30fc\u30b9\u30d7\u30ec\u30d3\u30e5\u30fc\u6709\u52b9"},
+    "detail_empty_group":            {"en": "Empty group",                        "ja": "\u7a7a\u30b0\u30eb\u30fc\u30d7"},
+    "detail_empty_mesh":             {"en": "Empty mesh",                         "ja": "\u7a7a\u30e1\u30c3\u30b7\u30e5"},
+    "detail_intermediate":           {"en": "Intermediate object found",          "ja": "\u4e2d\u9593\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3042\u308a"},
+    "detail_unused_mat":             {"en": "Unused material ({0})",              "ja": "\u672a\u4f7f\u7528\u30de\u30c6\u30ea\u30a2\u30eb\uff08{0}\uff09"},
+    "detail_unused_texture":         {"en": "Unused texture ({0})",               "ja": "\u672a\u4f7f\u7528\u30c6\u30af\u30b9\u30c1\u30e3\uff08{0}\uff09"},
+    "detail_unused_utility":         {"en": "Unused utility ({0})",               "ja": "\u672a\u4f7f\u7528\u30e6\u30fc\u30c6\u30a3\u30ea\u30c6\u30a3\uff08{0}\uff09"},
+    "detail_empty_set":              {"en": "Empty set",                          "ja": "\u7a7a\u30bb\u30c3\u30c8"},
+    "detail_empty_namespace":        {"en": "Empty namespace",                    "ja": "\u7a7a\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9"},
     "detail_unit_mismatch":          {"en": "Unit: {0} (expected: {1})",           "ja": "\u5358\u4f4d: {0}\uff08\u671f\u5f85\u5024: {1}\uff09"},
     "detail_upaxis_mismatch":        {"en": "Up-axis: {0} (expected: {1})",        "ja": "Up\u8ef8: {0}\uff08\u671f\u5f85\u5024: {1}\uff09"},
     "detail_unknown_node":           {"en": "Unknown node (origType: {0})",        "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9\uff08\u5143\u30bf\u30a4\u30d7: {0}\uff09"},
     "detail_unknown_node_notype":    {"en": "Unknown node",                        "ja": "\u4e0d\u660e\u30ce\u30fc\u30c9"},
-    "detail_naming_segment_count":   {"en": "Segments: expected {0}+, got {1}",    "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8\u4e0d\u8db3: {0}\u4ee5\u4e0a\u5fc5\u8981, \u5b9f\u969b {1}"},
-    "detail_naming_list_mismatch":   {"en": "Seg {0}: '{1}' not in [{2}]",        "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8{0}: '{1}' \u304c\u8a31\u53ef\u5916 [{2}]"},
-    "detail_naming_not_number":      {"en": "Seg {0}: '{1}' is not a number",     "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8{0}: '{1}' \u306f\u6570\u5024\u3067\u306f\u306a\u3044"},
-    "detail_naming_digit_mismatch":  {"en": "Seg {0}: expected {1} digits, got {2}", "ja": "\u30bb\u30b0\u30e1\u30f3\u30c8{0}: {1}\u6841\u5fc5\u8981, \u5b9f\u969b{2}\u6841"},
-
     "detail_wrong_folder":           {"en": "Wrong folder name",                   "ja": "\u30d5\u30a9\u30eb\u30c0\u540d\u4e0d\u4e00\u81f4"},
-    "detail_expected_relative":      {"en": "Absolute path detected",              "ja": "\u7d76\u5bfe\u30d1\u30b9\u3092\u691c\u51fa"},
-    "detail_expected_absolute":      {"en": "Relative path detected",              "ja": "\u76f8\u5bfe\u30d1\u30b9\u3092\u691c\u51fa"},
+    "detail_expected_relative":      {"en": "Absolute path",                      "ja": "\u7d76\u5bfe\u30d1\u30b9"},
+    "detail_expected_absolute":      {"en": "Relative path",                      "ja": "\u76f8\u5bfe\u30d1\u30b9"},
     "detail_missing_file":           {"en": "File not found",                      "ja": "\u30d5\u30a1\u30a4\u30eb\u672a\u691c\u51fa"},
+
+    "detail_editor_artifact_set":     {"en": "Isolate Select set",                 "ja": "Isolate Select セット"},
+
+    # -- Preview risk messages (used by preview_* functions) --
+    "preview_warn_anim_keys":    {"en": "Animation keys detected — values will be overwritten by freeze", "ja": "アニメーションキー検出 — フリーズで値が上書きされます"},
+    "preview_warn_scale_inherit":{"en": "Non-uniform parent scale — freeze result may differ from intent", "ja": "親スケール非均一 — フリーズ結果が意図と異なる可能性"},
+    "preview_warn_blendshape":   {"en": "blendShape {count} connected — removing tweaks may break deformation", "ja": "blendShape {count} 件接続 — Tweaks除去で変形が崩れる可能性"},
+    "preview_warn_instance_shared":{"en": "Possibly intentional instance — shared structure will be lost", "ja": "意図的なインスタンスの可能性 — 共有構造が失われます"},
+    "preview_warn_transform_intent":{"en": "Possibly intentional values — will be reset by freeze", "ja": "意図的な値の可能性 — フリーズで値がリセットされます"},
+    "preview_warn_deformer_break":{"en": "Deformer connected — removal may break deformation", "ja": "デフォーマ接続中 — 削除すると変形が壊れる可能性"},
+    "preview_warn_custom_attr":  {"en": "Custom attribute connected — deletion will break references", "ja": "カスタムアトリビュート接続 — 削除で参照が切れます"},
+    "preview_warn_expression":   {"en": "Expression reference — deletion may cause script errors", "ja": "エクスプレッション参照 — 削除でスクリプトエラーの可能性"},
+
+    # -- Risk default (shown when no specific per-node risk detected) --
+    "risk_not_detected":     {"en": "No risks detected",               "ja": "リスク未検出"},
+    "risk_not_applicable":   {"en": "—",                               "ja": "—"},
+
+    # -- Risk / Warning --
+    "risk_high":             {"en": "High",                           "ja": "高"},
+    "risk_medium":           {"en": "Medium",                         "ja": "中"},
+    "risk_low":              {"en": "Low",                             "ja": "低"},
+    "risk_dep_col":          {"en": "Dependencies / Risks",           "ja": "依存関係 / リスク"},
+
+    "fix_confirm_neutral_msg":{"en": "Fix {count} item(s).",              "ja": "修正を実行します。\n対象: {count} 件"},
+    "warn_high_confirm":     {"en": "This is a HIGH-RISK operation. Really proceed?",
+                              "ja": "高リスク操作です。本当に実行しますか？"},
+    "fix_select_all_risk_confirm": {"en": "Some items have risks. Check them too?",
+                              "ja": "リスクのある項目が含まれています。それらもチェックしますか？"},
 
     # -- Results --
     "results_summary":       {"en": "{count} issue(s)",              "ja": "{count} \u4ef6"},
@@ -418,7 +513,49 @@ _TR = {
     "results_node_col":      {"en": "Node",                          "ja": "\u30ce\u30fc\u30c9"},
     "results_detail_col":    {"en": "Detail",                        "ja": "\u8a73\u7d30"},
     "results_all":           {"en": "All",                           "ja": "\u3059\u3079\u3066"},
-    "results_no_issues":     {"en": "No issues found.",              "ja": "\u554f\u984c\u306a\u3057"},
+    "results_no_issues":     {"en": "No nodes detected.",              "ja": "\u691c\u51fa\u30ce\u30fc\u30c9\u306a\u3057"},
+
+    # -- Check item descriptions (for ResultsWindow right panel) --
+    "desc_all":                 {"en": "All check results — Click an item header to view details and fix issues.",
+                                 "ja": "全チェック項目の結果を表示 — 項目名をクリックで詳細の確認・修正ができます"},
+    "desc_fix_hint":            {"en": "You can fix checked items with \"Fix Selected\" below.",
+                                 "ja": "チェックした項目は下の「選択項目を修正」で修正できます。"},
+
+    # -- Geometry (5) --
+    "desc_history":             {"en": "Detect unnecessary history on meshes",
+                                 "ja": "\u30e1\u30c3\u30b7\u30e5\u306e\u4e0d\u8981\u306a\u30d2\u30b9\u30c8\u30ea\u3092\u691c\u51fa"},
+    "desc_transform":           {"en": "Detect non-frozen transforms",
+                                 "ja": "\u672a\u30d5\u30ea\u30fc\u30ba\u306e\u30c8\u30e9\u30f3\u30b9\u30d5\u30a9\u30fc\u30e0\u3092\u691c\u51fa"},
+    "desc_vertex_tweaks":       {"en": "Detect unnecessary vertex edit history (tweaks) on meshes",
+                                 "ja": "\u30e1\u30c3\u30b7\u30e5\u306b\u6b8b\u308b\u4e0d\u8981\u306a\u9802\u70b9\u7de8\u96c6\u5c65\u6b74\uff08Tweak\uff09\u3092\u691c\u51fa"},
+    "desc_instances":           {"en": "Detect instanced meshes",
+                                 "ja": "\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9\u30e1\u30c3\u30b7\u30e5\u3092\u691c\u51fa"},
+    "desc_smooth_preview":      {"en": "Detect meshes with smooth preview enabled",
+                                 "ja": "\u30b9\u30e0\u30fc\u30b9\u30d7\u30ec\u30d3\u30e5\u30fc\u304c\u6709\u52b9\u306a\u30e1\u30c3\u30b7\u30e5\u3092\u691c\u51fa"},
+
+    # -- Unused (6) --
+    "desc_unused_nodes":        {"en": "Detect unused nodes",
+                                 "ja": "\u672a\u4f7f\u7528\u30ce\u30fc\u30c9\u3092\u691c\u51fa"},
+    "desc_intermediate_objects":{"en": "Detect unnecessary intermediate objects",
+                                 "ja": "\u4e0d\u8981\u306a\u4e2d\u9593\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u691c\u51fa"},
+    "desc_unused_mat":          {"en": "Detect unused materials and textures",
+                                 "ja": "\u672a\u4f7f\u7528\u30de\u30c6\u30ea\u30a2\u30eb\u30fb\u30c6\u30af\u30b9\u30c1\u30e3\u3092\u691c\u51fa"},
+    "desc_unused_layers":       {"en": "Detect empty layers",
+                                 "ja": "\u7a7a\u306e\u30ec\u30a4\u30e4\u30fc\u3092\u691c\u51fa"},
+    "desc_empty_sets":          {"en": "Detect empty object sets",
+                                 "ja": "\u7a7a\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u30bb\u30c3\u30c8\u3092\u691c\u51fa"},
+    "desc_namespaces":          {"en": "Detect unnecessary namespaces",
+                                 "ja": "\u4e0d\u8981\u306a\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9\u3092\u691c\u51fa"},
+
+    # -- Scene Environment (4) --
+    "desc_scene_units":         {"en": "Check scene units and up-axis settings",
+                                 "ja": "\u30b7\u30fc\u30f3\u5358\u4f4d\u3068Up\u8ef8\u306e\u8a2d\u5b9a\u3092\u78ba\u8a8d"},
+    "desc_unknown_nodes":       {"en": "Detect unknown node types",
+                                 "ja": "\u4e0d\u660e\u306a\u30ce\u30fc\u30c9\u30bf\u30a4\u30d7\u3092\u691c\u51fa"},
+    "desc_referenced_nodes":    {"en": "Detect external referenced nodes",
+                                 "ja": "\u5916\u90e8\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u3092\u691c\u51fa"},
+    "desc_file_paths":          {"en": "Detect texture path issues",
+                                 "ja": "\u30c6\u30af\u30b9\u30c1\u30e3\u30d1\u30b9\u306e\u4e0d\u5099\u3092\u691c\u51fa"},
 }
 
 _current_lang = "en"
@@ -441,24 +578,109 @@ def set_language(lang):
     global _current_lang
     _current_lang = lang
 # ---------------------------------------------------------------------------
-# [011] help_content — How to Use dialog HTML
+# [011] help_content — How to Use dialog HTML + README rendering
 # ---------------------------------------------------------------------------
 
-_HELP_HTML = {
+# GitHub README URLs (raw content, no API required)
+# JA = default README.md, EN = README_en.md (both from release repo)
+_README_URLS = {
+    "ja": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/scene_cleanup_tools/README.md",
+    "en": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/scene_cleanup_tools/README_en.md",
+}
+
+# marked.js CDN (ES5 compatible, version-pinned)
+_MARKED_CDN = "https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"
+
+# HTML template for rendering Markdown via marked.js in QWebView/QWebEngineView
+# Uses __PLACEHOLDER__ markers to avoid curly-brace conflicts.
+# Replace __CDN_URL__ and __ENCODED_MD__ at runtime via str.replace().
+_HELP_RENDER_TEMPLATE = (
+    '<!DOCTYPE html>'
+    '<html><head><meta charset="utf-8"><style>'
+    'body{background-color:#2b2b2b;color:#e0e0e0;'
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,'
+    'Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;'
+    'padding:16px;margin:0}'
+    'h1,h2,h3,h4{color:#fff}'
+    'h1{font-size:22px;border-bottom:1px solid #555;padding-bottom:8px}'
+    'h2{font-size:18px;border-bottom:1px solid #444;padding-bottom:6px}'
+    'h3{font-size:15px}'
+    'a{color:#7aa2f7}'
+    'code{background-color:#3c3c3c;padding:2px 6px;border-radius:3px;font-size:13px}'
+    'pre{background-color:#1e1e1e;padding:12px;border-radius:6px;overflow-x:auto}'
+    'pre code{background:none;padding:0}'
+    'table{border-collapse:collapse;width:100%;margin:8px 0}'
+    'th,td{border:1px solid #555;padding:6px 10px;text-align:left}'
+    'th{background-color:#353535}'
+    'blockquote{border-left:3px solid #7aa2f7;margin:8px 0;padding:4px 12px;color:#aaa}'
+    'ul,ol{padding-left:24px}'
+    'li{margin:4px 0}'
+    'img{max-width:100%}'
+    '</style></head><body>'
+    '<div id="content">Loading...</div>'
+    '<script src="__CDN_URL__"></script>'
+    '<script>'
+    'try{'
+    'var md=decodeURIComponent("__ENCODED_MD__");'
+    'document.getElementById("content").innerHTML=marked.parse(md);'
+    '}catch(e){'
+    'document.getElementById("content").innerHTML='
+    '"<p style=\'color:#ff4444\'>Markdown rendering failed: "+e.message+"</p>";'
+    '}'
+    '</script></body></html>'
+)
+
+# Loading HTML (shown while fetching README)
+_HELP_LOADING_HTML = (
+    '<!DOCTYPE html>'
+    '<html><head><meta charset="utf-8"><style>'
+    'body{background-color:#2b2b2b;color:#e0e0e0;'
+    'font-family:sans-serif;text-align:center;padding-top:80px}'
+    '.spinner{display:inline-block;width:24px;height:24px;'
+    'border:3px solid #555;border-top-color:#7aa2f7;'
+    'border-radius:50%;animation:spin .8s linear infinite}'
+    '@keyframes spin{to{transform:rotate(360deg)}}'
+    '</style></head><body>'
+    '<div class="spinner"></div>'
+    '<p>Loading README from GitHub...</p>'
+    '</body></html>'
+)
+
+# Error HTML template (shown on fetch failure, with fallback help content)
+# Replace __ERROR_MSG__ and __FALLBACK_HTML__ at runtime via str.replace().
+_HELP_ERROR_TEMPLATE = (
+    '<!DOCTYPE html>'
+    '<html><head><meta charset="utf-8"><style>'
+    'body{background-color:#2b2b2b;color:#e0e0e0;'
+    'font-family:sans-serif;padding:16px}'
+    '.error-banner{background-color:#3a2020;border:1px solid #ff4444;'
+    'border-radius:6px;padding:8px 12px;margin-bottom:16px;'
+    'color:#ff8888;font-size:12px}'
+    'h2,h3{color:#fff}'
+    'b{color:#e0e0e0}'
+    'i{color:#aaa}'
+    '</style></head><body>'
+    '<div class="error-banner">\u26a0 __ERROR_MSG__</div>'
+    '__FALLBACK_HTML__'
+    '</body></html>'
+)
+
+# Fallback help content (original static HTML, used when offline)
+_HELP_FALLBACK_HTML = {
     "en": """
 <h2>Scene Cleanup Tools \u2014 How to Use</h2>
 <h3>Check Scope</h3>
 <p>All mesh nodes in the scene are checked automatically.</p>
 <p><i>Note: Scene-wide items (Empty Groups, Unused Materials, Unused Layers,
-Empty Sets, Namespaces, Unknown Nodes, Referenced Nodes, Duplicate Names,
-Scene Units) always scan the entire scene.</i></p>
-<h3>Check Items (17)</h3>
-<p><b>Geometry (7)</b> \u2014 History, transforms, vertex tweaks, instances,
-smooth mesh preview, shape suffix, duplicate names.</p>
+Empty Sets, Namespaces, Unknown Nodes, Referenced Nodes,
+Scene Units, File Paths) always scan the entire scene.</i></p>
+<h3>Check Items (15)</h3>
+<p><b>Geometry (5)</b> \u2014 History, transforms, vertex tweaks, instances,
+smooth mesh preview.</p>
 <p><b>Unused (6)</b> \u2014 Empty groups/shapes, intermediate objects,
 unused materials, unused layers, empty sets, namespaces.</p>
 <p><b>Scene Environment (4)</b> \u2014 Scene units, unknown nodes,
-referenced nodes, naming check.</p>
+referenced nodes, file paths.</p>
 <p>Each item can be toggled ON/OFF. Use <b>All ON</b> / <b>All OFF</b> /
 <b>Reset to Defaults</b> for bulk control.</p>
 <h3>Running a Check</h3>
@@ -470,11 +692,11 @@ referenced nodes, naming check.</p>
 <h2>\u30b7\u30fc\u30f3\u6574\u7406\u30c4\u30fc\u30eb \u2014 \u4f7f\u3044\u65b9</h2>
 <h3>\u30c1\u30a7\u30c3\u30af\u7bc4\u56f2</h3>
 <p>\u30b7\u30fc\u30f3\u5185\u306e\u5168\u30e1\u30c3\u30b7\u30e5\u30ce\u30fc\u30c9\u304c\u81ea\u52d5\u7684\u306b\u30c1\u30a7\u30c3\u30af\u5bfe\u8c61\u306b\u306a\u308a\u307e\u3059\u3002</p>
-<p><i>\u203b \u30b7\u30fc\u30f3\u5168\u4f53\u9805\u76ee\uff08\u7a7a\u30b0\u30eb\u30fc\u30d7\u3001\u672a\u4f7f\u7528\u30de\u30c6\u30ea\u30a2\u30eb\u3001\u672a\u4f7f\u7528\u30ec\u30a4\u30e4\u30fc\u3001\u7a7a\u30bb\u30c3\u30c8\u3001\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9\u3001\u4e0d\u660e\u30ce\u30fc\u30c9\u3001\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u3001\u91cd\u8907\u540d\u3001\u30b7\u30fc\u30f3\u5358\u4f4d\uff09\u306f\u5e38\u306b\u30b7\u30fc\u30f3\u5168\u4f53\u3092\u30b9\u30ad\u30e3\u30f3\u3057\u307e\u3059\u3002</i></p>
-<h3>\u30c1\u30a7\u30c3\u30af\u9805\u76ee\uff0817\uff09</h3>
-<p><b>\u30b8\u30aa\u30e1\u30c8\u30ea\uff087\uff09</b> \u2014 \u30d2\u30b9\u30c8\u30ea\u3001\u30c8\u30e9\u30f3\u30b9\u30d5\u30a9\u30fc\u30e0\u3001\u9802\u70b9Tweaks\u3001\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9\u3001\u30b9\u30e0\u30fc\u30b9\u30d7\u30ec\u30d3\u30e5\u30fc\u3001Shape Suffix\u3001\u91cd\u8907\u540d\u3002</p>
+<p><i>\u203b \u30b7\u30fc\u30f3\u5168\u4f53\u9805\u76ee\uff08\u7a7a\u30b0\u30eb\u30fc\u30d7\u3001\u672a\u4f7f\u7528\u30de\u30c6\u30ea\u30a2\u30eb\u3001\u672a\u4f7f\u7528\u30ec\u30a4\u30e4\u30fc\u3001\u7a7a\u30bb\u30c3\u30c8\u3001\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9\u3001\u4e0d\u660e\u30ce\u30fc\u30c9\u3001\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u3001\u30b7\u30fc\u30f3\u5358\u4f4d\u3001\u30d5\u30a1\u30a4\u30eb\u30d1\u30b9\uff09\u306f\u5e38\u306b\u30b7\u30fc\u30f3\u5168\u4f53\u3092\u30b9\u30ad\u30e3\u30f3\u3057\u307e\u3059\u3002</i></p>
+<h3>\u30c1\u30a7\u30c3\u30af\u9805\u76ee\uff0815\uff09</h3>
+<p><b>\u30b8\u30aa\u30e1\u30c8\u30ea\uff085\uff09</b> \u2014 \u30d2\u30b9\u30c8\u30ea\u3001\u30c8\u30e9\u30f3\u30b9\u30d5\u30a9\u30fc\u30e0\u3001\u9802\u70b9Tweaks\u3001\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9\u3001\u30b9\u30e0\u30fc\u30b9\u30d7\u30ec\u30d3\u30e5\u30fc\u3002</p>
 <p><b>\u672a\u4f7f\u7528\u30fb\u4e0d\u8981\u30ce\u30fc\u30c9\uff086\uff09</b> \u2014 \u7a7a\u30b0\u30eb\u30fc\u30d7/\u7a7a\u30b7\u30a7\u30a4\u30d7\u3001\u4e2d\u9593\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3001\u672a\u4f7f\u7528\u30de\u30c6\u30ea\u30a2\u30eb\u3001\u672a\u4f7f\u7528\u30ec\u30a4\u30e4\u30fc\u3001\u7a7a\u30bb\u30c3\u30c8\u3001\u30cd\u30fc\u30e0\u30b9\u30da\u30fc\u30b9\u3002</p>
-<p><b>\u30b7\u30fc\u30f3\u74b0\u5883\uff084\uff09</b> \u2014 \u30b7\u30fc\u30f3\u5358\u4f4d\u3001\u4e0d\u660e\u30ce\u30fc\u30c9\u3001\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u3001\u547d\u540d\u30c1\u30a7\u30c3\u30af\u3002</p>
+<p><b>\u30b7\u30fc\u30f3\u74b0\u5883\uff084\uff09</b> \u2014 \u30b7\u30fc\u30f3\u5358\u4f4d\u3001\u4e0d\u660e\u30ce\u30fc\u30c9\u3001\u30ea\u30d5\u30a1\u30ec\u30f3\u30b9\u30ce\u30fc\u30c9\u3001\u30d5\u30a1\u30a4\u30eb\u30d1\u30b9\u3002</p>
 <p>\u5404\u9805\u76ee\u306f\u500b\u5225\u306bON/OFF\u5207\u308a\u66ff\u3048\u53ef\u80fd\u3002<b>\u3059\u3079\u3066ON</b> / <b>\u3059\u3079\u3066OFF</b> / <b>\u30c7\u30d5\u30a9\u30eb\u30c8\u306b\u623b\u3059</b>\u3067\u4e00\u62ec\u64cd\u4f5c\u3002</p>
 <h3>\u30c1\u30a7\u30c3\u30af\u306e\u5b9f\u884c</h3>
 <p><b>\u30c1\u30a7\u30c3\u30af</b>\u30dc\u30bf\u30f3\u3067\u958b\u59cb\u3002\u7d50\u679c\u30a6\u30a3\u30f3\u30c9\u30a6\u306b\u691c\u51fa\u3055\u308c\u305f\u554f\u984c\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002</p>
@@ -512,18 +734,6 @@ def collect_meshes():
     return list(set(cmds.listRelatives(all_meshes, allParents=True, fullPath=True) or []))
 
 
-def collect_transform_nodes():
-    """Collect all transform nodes in the scene.
-
-    Shape nodes are excluded; their naming is validated
-    by check_shape_suffix instead.
-
-    Returns:
-        list[str]: Long names of transform nodes.
-    """
-    all_transforms = cmds.ls(dag=True, long=True, type="transform") or []
-    return [t for t in all_transforms if t not in DEFAULT_CAMERAS]
-
 
 def get_top_nodes(nodes):
     """Return unique top-level transform ancestors for *nodes*."""
@@ -533,13 +743,168 @@ def get_top_nodes(nodes):
         if len(parts) > 1:
             tops.add("|".join(parts[:2]))
     return sorted(tops)
+
+
+# ---------------------------------------------------------------------------
+# Preflight checks (Phase 1 — high-risk Fix items)
+# ---------------------------------------------------------------------------
+# Each function returns {"safe": bool, "warnings": list[str]}
+
+def preflight_history(nodes):
+    """Preflight for history deletion: detect blendShape / deformer / dagPose deps.
+
+    Returns warnings only for specific risks (blendShape/deformer/dagPose).
+    Returns empty when no risk — unified fallback handles display.
+    """
+    warnings = []
+    bs_count = 0
+    deformer_count = 0
+    skin_count = 0
+    dagpose_nodes = set()
+    history_types = set()
+    for node in nodes:
+        hist = cmds.listHistory(node, pdo=True) or []
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
+        hist = [h for h in hist if h not in shapes]
+        for h in hist:
+            nt = cmds.nodeType(h)
+            history_types.add(nt)
+            if nt == "blendShape":
+                bs_count += 1
+            elif nt == "skinCluster":
+                skin_count += 1
+            elif nt in ("wire", "wrap", "lattice",
+                        "nonLinear", "cluster", "sculpt", "ffd",
+                        "deltaMush", "tension", "shrinkWrap"):
+                deformer_count += 1
+            # dagPose is not returned by listHistory; detect via listConnections
+            conns = cmds.listConnections(h, type="dagPose") or []
+            dagpose_nodes.update(conns)
+        # dagPose may also be connected directly to the transform node
+        direct_conns = cmds.listConnections(node, type="dagPose") or []
+        dagpose_nodes.update(direct_conns)
+    dagpose_count = len(dagpose_nodes)
+    has_risk = (bs_count > 0 or deformer_count > 0 or skin_count > 0
+                or dagpose_count > 0)
+    if bs_count > 0:
+        warnings.append(tr("preflight_history_blendshape", count=bs_count))
+    if skin_count > 0:
+        warnings.append(tr("preflight_history_skincluster", count=skin_count))
+    if deformer_count > 0:
+        warnings.append(tr("preflight_history_deformer", count=deformer_count))
+    if dagpose_count > 0:
+        warnings.append(tr("preflight_history_dagpose", count=dagpose_count))
+    return {"safe": not has_risk, "warnings": warnings}
+
+
+def preflight_unknown_nodes(nodes):
+    """Preflight for unknown node deletion: check unloaded plugins.
+
+    Returns warnings only for unloaded-plugin risk.
+    Returns empty when no risk — unified fallback handles display.
+    """
+    warnings = []
+    try:
+        loaded_plugins = set(cmds.pluginInfo(query=True, listPlugins=True) or [])
+    except Exception:
+        loaded_plugins = set()
+    # Build set of node types registered by loaded plugins
+    loaded_types = set()
+    for plug in loaded_plugins:
+        try:
+            types = cmds.pluginInfo(plug, query=True, dependNode=True) or []
+            loaded_types.update(types)
+        except Exception:
+            pass
+    unloaded_types = {}
+    for node in nodes:
+        real_type = None
+        try:
+            real_type = cmds.unknownNode(node, query=True, realClassName=True)
+        except Exception:
+            continue
+        if not real_type:
+            continue
+        if real_type not in loaded_types:
+            unloaded_types.setdefault(real_type, []).append(node)
+    has_risk = bool(unloaded_types)
+    if unloaded_types:
+        total = sum(len(v) for v in unloaded_types.values())
+        type_names = ", ".join(sorted(unloaded_types.keys()))
+        warnings.append(
+            tr("preflight_unknown_plugin", count=total, plugins=type_names)
+        )
+    return {"safe": not has_risk, "warnings": warnings}
+
+
+def preflight_referenced_nodes(nodes):
+    """Preflight for reference import: warn about all referenced nodes."""
+    warnings = []
+    # Filter out nodes that no longer exist in the scene
+    ref_count = len([n for n in nodes if cmds.objExists(n)])
+    if ref_count > 0:
+        warnings.append(
+            tr("preflight_ref_namespace", count=ref_count)
+        )
+    return {"safe": len(warnings) == 0, "warnings": warnings}
+
+
+_PREFLIGHT_DISPATCH = {
+    "history": preflight_history,
+    "unknown_nodes": preflight_unknown_nodes,
+    "referenced_nodes": preflight_referenced_nodes,
+}
+
+
+def _open_feedback_form(report_text):
+    """Open feedback form with report pre-filled via URL parameter.
+    Returns (success, message_key)."""
+    if not _FEEDBACK_FORM_URL or not _FEEDBACK_ENTRY_ID:
+        return False, "report_form_not_configured"
+    try:
+        encoded = _url_quote(report_text, safe='')
+    except TypeError:
+        # Python 2: quote() requires bytes, not unicode
+        encoded = _url_quote(report_text.encode('utf-8'), safe=b'')
+    # Build tool name and Maya version parameters
+    tool_name = "Scene Cleanup Tools {0}".format(__VERSION__)
+    maya_ver = cmds.about(version=True)
+    try:
+        tool_enc = _url_quote(tool_name, safe='')
+        ver_enc = _url_quote(maya_ver, safe='')
+    except TypeError:
+        tool_enc = _url_quote(tool_name.encode('utf-8'), safe=b'')
+        ver_enc = _url_quote(maya_ver.encode('utf-8'), safe=b'')
+    tool_key = _FEEDBACK_ENTRY_TOOL_NAME
+    tool_resp_key = tool_key + ".other_option_response"
+    ver_key = _FEEDBACK_ENTRY_MAYA_VERSION
+    ver_resp_key = ver_key + ".other_option_response"
+    url = "{0}?{1}={2}&{3}=__other_option__&{4}={5}&{6}=__other_option__&{7}={8}".format(
+        _FEEDBACK_FORM_URL,
+        _FEEDBACK_ENTRY_ID, encoded,
+        tool_key, tool_resp_key, tool_enc,
+        ver_key, ver_resp_key, ver_enc)
+    if len(url) > _URL_MAX_LENGTH:
+        # Fallback: open with tool/version params only (drop report text)
+        fallback = "{0}?{1}=__other_option__&{2}={3}&{4}=__other_option__&{5}={6}".format(
+            _FEEDBACK_FORM_URL,
+            tool_key, tool_resp_key, tool_enc,
+            ver_key, ver_resp_key, ver_enc)
+        webbrowser.open(fallback)
+        return True, "report_url_too_long"
+    webbrowser.open(url)
+    return True, "report_form_opened"
 # ---------------------------------------------------------------------------
 # [100] geometry — Check functions A: Geometry
 # ---------------------------------------------------------------------------
 # Each function signature: check_<key>(targets) -> list[dict]
 #   targets: list of mesh transform long-names
 #   returns: list of {"node": str, "detail": str}
-# Exception: check_duplicate_names is scene-wide (no targets parameter).
+
+
+
+# Node types returned by listHistory that are NOT construction history
+_HISTORY_EXCLUDE_TYPES = frozenset(["shadingEngine", "groupId", "objectSet"])
 
 
 def check_history(targets):
@@ -550,16 +915,32 @@ def check_history(targets):
         if hist is None:
             continue
         shapes = cmds.listRelatives(target, shapes=True, fullPath=True) or []
-        hist = [h for h in hist if h not in shapes]
+        hist = [h for h in hist
+                if h not in shapes
+                and cmds.nodeType(h) not in _HISTORY_EXCLUDE_TYPES]
         if hist:
             results.append({"node": target, "detail": tr("detail_history")})
     return results
 
 
 def check_transform(targets):
-    """Check for unfreezed transforms."""
+    """Check for unfreezed transforms.
+
+    Instanced nodes are excluded because makeIdentity produces
+    unpredictable results on shared shapes.
+    """
     results = []
     for target in targets:
+        # Skip instances (shape shared by multiple parents)
+        shapes = cmds.listRelatives(target, shapes=True, fullPath=True) or []
+        is_instance = False
+        for shape in shapes:
+            parents = cmds.listRelatives(shape, allParents=True, fullPath=True)
+            if parents and len(parents) >= 2:
+                is_instance = True
+                break
+        if is_instance:
+            continue
         try:
             t = cmds.getAttr(target + ".translate")[0]
             r = cmds.getAttr(target + ".rotate")[0]
@@ -665,49 +1046,220 @@ def check_smooth_preview(targets):
     return results
 
 
-def check_shape_suffix(targets):
-    """Check that shape names follow the <transform>Shape convention."""
-    results = []
-    for target in targets:
-        shapes = cmds.listRelatives(target, shapes=True, fullPath=True)
-        if not shapes:
+# -- Preview functions (Phase 2: medium-risk impact analysis) --------------
+
+def preview_transform(nodes):
+    """Dry-run analysis for transform fix: detect anim keys & scale inheritance.
+
+    Returns list of {node, action, risks} dicts.
+    """
+    previews = []
+    for node in nodes:
+        if not cmds.objExists(node):
             continue
-        t_short = target.rsplit("|", 1)[-1]
-        expected = t_short + "Shape"
+        risks = []
+        # Check for animation keys
+        anim_curves = cmds.listConnections(node, type="animCurve") or []
+        if anim_curves:
+            risks.append(tr("preview_warn_anim_keys"))
+        # Check parent scale inheritance
+        parent = cmds.listRelatives(node, parent=True, fullPath=True)
+        if parent:
+            try:
+                ps = cmds.getAttr(parent[0] + ".scale")[0]
+                if any(abs(v - 1.0) > 1e-6 for v in ps):
+                    risks.append(tr("preview_warn_scale_inherit"))
+            except Exception:
+                pass
+        if not risks:
+            risks.append(tr("preview_warn_transform_intent"))
+        previews.append({
+            "node": node,
+            "action": "Freeze Transforms",
+            "risks": risks,
+        })
+    return previews
+
+
+def preview_vertex_tweaks(nodes):
+    """Dry-run analysis for vertex_tweaks fix: detect blendShape connections.
+
+    Returns list of {node, action, risks} dicts.
+    """
+    previews = []
+    for node in nodes:
+        if not cmds.objExists(node):
+            continue
+        risks = []
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True,
+                                    type="mesh") or []
+        bs_count = 0
         for shape in shapes:
             if cmds.getAttr(shape + ".intermediateObject"):
                 continue
-            s_short = shape.rsplit("|", 1)[-1]
-            if s_short != expected:
-                results.append({
-                    "node": target,
-                    "detail": tr("detail_shape_suffix"),
-                })
-    return results
+            bs_nodes = cmds.listConnections(shape, type="blendShape") or []
+            bs_count += len(set(bs_nodes))
+        if bs_count > 0:
+            risks.append(tr("preview_warn_blendshape", count=bs_count))
+        previews.append({
+            "node": node,
+            "action": "Freeze pnts (polyMoveVertex + deleteHistory)",
+            "risks": risks,
+        })
+    return previews
 
 
-def check_duplicate_names():
-    """Check for duplicate short names across all DAG nodes (scene-wide)."""
-    results = []
-    all_dag = cmds.ls(dag=True, long=True) or []
-    skip_defaults = DEFAULT_CAMERAS
-    short_map = {}  # short_name -> [long_name, ...]
-    for ln in all_dag:
-        if ln in skip_defaults:
+def preview_instances(nodes):
+    """Dry-run analysis for instances fix: all instances carry shared-structure risk.
+
+    Returns list of {node, action, risks} dicts.
+    """
+    previews = []
+    for node in nodes:
+        if not cmds.objExists(node):
             continue
-        sn = ln.rsplit("|", 1)[-1]
-        if not sn:
+        previews.append({
+            "node": node,
+            "action": "Uninstance (duplicate + delete original)",
+            "risks": [tr("preview_warn_instance_shared")],
+        })
+    return previews
+
+
+# -- Fix functions (Phase A: A-4, A-5 / Phase B: B-1) ---------------------
+
+def fix_transform(nodes):
+    """Freeze transforms on given nodes (makeIdentity). Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
             continue
-        short_map.setdefault(sn, []).append(ln)
-    for sn, lns in short_map.items():
-        if len(lns) < 2:
+        try:
+            cmds.makeIdentity(node, apply=True, translate=True,
+                              rotate=True, scale=True, normal=0)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_transform: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_smooth_preview(nodes):
+    """Reset displaySmoothMesh to 0 on given nodes. Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
             continue
-        for ln in lns:
-            results.append({
-                "node": ln,
-                "detail": tr("detail_duplicate_name").format(len(lns)),
-            })
-    return results
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
+        node_fixed = False
+        for shape in shapes:
+            try:
+                if cmds.getAttr(shape + ".displaySmoothMesh") != 0:
+                    cmds.setAttr(shape + ".displaySmoothMesh", 0)
+                    node_fixed = True
+            except Exception as exc:
+                log.warning("fix_smooth_preview: %s failed: %s", shape, exc)
+        if node_fixed:
+            fixed += 1
+        elif shapes:
+            failed += 1
+    return fixed, failed
+
+
+def fix_history(nodes):
+    """Delete all construction history on given nodes. IRREVERSIBLE."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            cmds.delete(node, constructionHistory=True)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_history: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_vertex_tweaks(nodes):
+    """Freeze vertex tweaks (pnts) via polyMoveVertex + history delete. IRREVERSIBLE."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True,
+                                    type="mesh")
+        if not shapes:
+            failed += 1
+            continue
+        node_fixed = False
+        for shape in shapes:
+            if cmds.getAttr(shape + ".intermediateObject"):
+                continue
+            try:
+                pnts_size = cmds.getAttr(shape + ".pnts", size=True)
+            except Exception:
+                continue
+            if not pnts_size:
+                continue
+            try:
+                pnts = cmds.getAttr(shape + ".pnts[*]")
+            except Exception:
+                continue
+            if pnts is None:
+                continue
+            has_tweaks = any(
+                abs(pt[0]) > 1e-7 or abs(pt[1]) > 1e-7 or abs(pt[2]) > 1e-7
+                for pt in pnts
+            )
+            if has_tweaks:
+                try:
+                    cmds.polyMoveVertex(shape, localTranslate=(0, 0, 0))
+                    cmds.delete(shape, constructionHistory=True)
+                    node_fixed = True
+                except Exception as exc:
+                    log.warning("fix_vertex_tweaks: %s failed: %s", shape, exc)
+        if node_fixed:
+            fixed += 1
+        else:
+            failed += 1
+    return fixed, failed
+
+
+def fix_instances(nodes):
+    """Uninstance given nodes by duplicating unique copies. Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            parent = cmds.listRelatives(node, parent=True, fullPath=True)
+            short_name = node.rsplit("|", 1)[-1] if "|" in node else node
+            dup = cmds.duplicate(node, returnRootsOnly=True)
+            if not dup:
+                failed += 1
+                continue
+            cmds.delete(node)
+            if parent and cmds.objExists(parent[0]):
+                moved = cmds.parent(dup[0], parent[0])
+                cmds.rename(moved[0], short_name)
+            else:
+                cmds.rename(dup[0], short_name)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_instances: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
 # ---------------------------------------------------------------------------
 # [200] unused — Check functions B: Unused & Unnecessary Nodes
 # ---------------------------------------------------------------------------
@@ -930,8 +1482,6 @@ def check_unused_layers(check_display=True, check_render=True, check_animation=T
             log.warning("check_unused_layers: ls(animLayer) failed: {0}".format(e))
             anim_layers = []
         for layer in anim_layers:
-            if layer == "BaseAnimation":
-                continue
             try:
                 curves = cmds.listConnections(layer, type="animCurve")
             except Exception as e:
@@ -947,8 +1497,19 @@ def check_unused_layers(check_display=True, check_render=True, check_animation=T
     return results
 
 
+# Editor artifact objectSet name patterns (Isolate Select auto-generated)
+_EDITOR_ARTIFACT_PATTERNS = [
+    "*textureEditorIsolateSelectSet*",
+    "*modelPanelViewSelectedSet*",
+]
+
+
 def check_empty_sets():
-    """Check for empty or unused object sets."""
+    """Check for empty or unused object sets.
+
+    Also detects editor artifact objectSets (Isolate Select) regardless
+    of member count, as they are session data and safe to delete.
+    """
     results = []
     try:
         all_sets = cmds.ls(type="objectSet") or []
@@ -960,6 +1521,8 @@ def check_empty_sets():
         "defaultLightSet", "defaultObjectSet",
         "initialParticleSE", "initialShadingGroup",
     }
+    # Track nodes already reported as editor artifacts to avoid duplicates
+    artifact_reported = set()
 
     for s in all_sets:
         short_name = s.rsplit("|", 1)[-1] if "|" in s else s
@@ -990,6 +1553,17 @@ def check_empty_sets():
             log.warning(
                 "check_empty_sets: cmds.sets failed for {0}: {1}".format(s, e)
             )
+            continue
+        # Editor artifact detection (Isolate Select sets — may have members)
+        is_artifact = False
+        for pattern in _EDITOR_ARTIFACT_PATTERNS:
+            if fnmatch.fnmatchcase(short_name, pattern):
+                is_artifact = True
+                break
+        if is_artifact:
+            if short_name not in artifact_reported:
+                results.append({"node": short_name, "detail": tr("detail_editor_artifact_set")})
+                artifact_reported.add(short_name)
             continue
         if len(members) == 0:
             results.append({"node": short_name, "detail": tr("detail_empty_set")})
@@ -1023,11 +1597,249 @@ def check_namespaces():
             results.append({"node": ":{0}".format(ns), "detail": tr("detail_empty_namespace")})
 
     return results
+
+
+# -- Preview functions (Phase 2: medium-risk impact analysis) --------------
+
+def preview_intermediate_objects(nodes):
+    """Dry-run analysis for intermediate_objects fix: detect deformer-connected Orig shapes.
+
+    Returns list of {node, action, risks} dicts.
+    """
+    previews = []
+    for node in nodes:
+        if not cmds.objExists(node):
+            continue
+        risks = []
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
+        intermediates = [s for s in shapes
+                         if cmds.getAttr(s + ".intermediateObject")]
+        for inter_shape in intermediates:
+            # Check if connected to deformers
+            deformers = cmds.listConnections(
+                inter_shape, type="geometryFilter") or []
+            if deformers:
+                risks.append(tr("preview_warn_deformer_break"))
+                break
+        previews.append({
+            "node": node,
+            "action": "Delete intermediate objects",
+            "risks": risks,
+        })
+    return previews
+
+
+def preview_unused_nodes(nodes):
+    """Dry-run analysis for unused_nodes fix: scan for custom attr / expression refs.
+
+    Returns list of {node, action, risks} dicts.
+    """
+    previews = []
+    # Pre-scan: build set of expression-referenced nodes.
+    # NOTE: Uses simple substring match (short_name in expr_string).
+    # This may produce false positives (e.g. node "box" matching "sandbox").
+    # Acceptable because this is a best-effort preview — users can exclude
+    # false positives via the PreviewDialog's exclude checkboxes.
+    expr_referenced = set()
+    try:
+        all_exprs = cmds.ls(type="expression") or []
+        for expr_node in all_exprs:
+            try:
+                expr_str = cmds.getAttr(expr_node + ".expression") or ""
+            except Exception:
+                continue
+            for node in nodes:
+                short = node.rsplit("|", 1)[-1] if "|" in node else node
+                if short in expr_str:
+                    expr_referenced.add(node)
+    except Exception:
+        pass
+
+    for node in nodes:
+        if not cmds.objExists(node):
+            continue
+        risks = []
+        # Check custom attributes referencing this node
+        try:
+            user_attrs = cmds.listAttr(node, userDefined=True) or []
+            if user_attrs:
+                # Check if any other node connects to these attrs
+                for attr in user_attrs:
+                    conns = cmds.listConnections(
+                        node + "." + attr, source=True,
+                        destination=True) or []
+                    if conns:
+                        risks.append(tr("preview_warn_custom_attr"))
+                        break
+        except Exception:
+            pass
+        # Check expression references
+        if node in expr_referenced:
+            risks.append(tr("preview_warn_expression"))
+        previews.append({
+            "node": node,
+            "action": "Delete node",
+            "risks": risks,
+        })
+    return previews
+
+
+# -- Fix functions (Phase A: A-6, A-7, A-8 / Phase B: B-2, B-3) -----------
+
+def fix_namespaces(nodes):
+    """Remove empty namespaces. IRREVERSIBLE."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        ns = node.lstrip(":")
+        if not ns:
+            failed += 1
+            continue
+        try:
+            cmds.namespace(removeNamespace=ns)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_namespaces: %s failed: %s", ns, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_unused_mat(nodes):
+    """Delete unused material/texture nodes. Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            cmds.delete(node)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_unused_mat: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_unused_layers(nodes):
+    """Delete unused layer nodes. Undo-safe.
+
+    Maya may raise exceptions during layer deletion due to internal
+    connection cleanup (animLayerManager, renderSetup, etc.) even when
+    the node is actually removed.  Rather than relying on objExists
+    (which can return stale results), we snapshot the scene's layer
+    nodes before and after deletion and compare.
+    """
+    if not nodes:
+        return 0, 0
+
+    # Snapshot: all layer nodes currently in the scene.
+    def _all_layers():
+        return set(
+            (cmds.ls(type="displayLayer") or [])
+            + (cmds.ls(type="renderLayer") or [])
+            + (cmds.ls(type="animLayer") or [])
+        )
+
+    before = _all_layers()
+
+    # Attempt deletion — ignore exceptions (Maya may raise even on success).
+    for node in nodes:
+        if node not in before:
+            continue
+        try:
+            cmds.delete(node)
+        except Exception as exc:
+            log.debug("fix_unused_layers: %s raised during delete: %s", node, exc)
+
+    # Re-scan to determine actual outcome.
+    after = _all_layers()
+
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if node not in before:
+            # Was already gone before we started.
+            failed += 1
+        elif node not in after:
+            fixed += 1
+        else:
+            log.warning("fix_unused_layers: %s still exists after delete", node)
+            failed += 1
+
+    return fixed, failed
+
+
+def fix_empty_sets(nodes):
+    """Delete empty object sets. Undo-safe.
+
+    Handles locked nodes (e.g. Turtle plugin nodes) by unlocking
+    before deletion. If deletion still fails, the node is skipped.
+    """
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            # Unlock if locked (e.g. Turtle plugin nodes)
+            if cmds.lockNode(node, query=True, lock=True)[0]:
+                cmds.lockNode(node, lock=False)
+            cmds.delete(node)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_empty_sets: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_intermediate_objects(nodes):
+    """Delete intermediate (construction) objects on given nodes. Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True)
+        if not shapes:
+            failed += 1
+            continue
+        intermediates = [s for s in shapes
+                         if cmds.getAttr(s + ".intermediateObject")]
+        if not intermediates:
+            failed += 1
+            continue
+        try:
+            cmds.delete(intermediates)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_intermediate_objects: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_unused_nodes(nodes):
+    """Delete unused nodes (empty groups, empty shapes). Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            cmds.delete(node)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_unused_nodes: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
 # ---------------------------------------------------------------------------
 # [300] scene_env — Check functions C: Scene Environment
 # ---------------------------------------------------------------------------
 # Scene-wide checks; they scan the entire scene.
-# Exception: check_naming_check requires targets for regex pattern matching.
+
 
 
 def check_scene_units(expected_unit="cm", expected_upaxis="y"):
@@ -1129,71 +1941,6 @@ def check_referenced_nodes():
     return results
 
 
-def check_naming_check(targets, naming_rules=None, separator="_"):
-    """Check node naming against segment-based rules.
-
-    Args:
-        targets: list of node paths to check.
-        naming_rules: list of rule dicts, each with:
-            - mode: "list" | "any" | "number"
-            - values: list of allowed strings (for "list" mode)
-            - digits: int, 0 = any digit count (for "number" mode)
-        separator: string used to split node name into segments.
-
-    If naming_rules is None or empty, the check is skipped.
-    """
-    results = []
-    if not naming_rules:
-        return results
-
-    num_rules = len(naming_rules)
-    for target in targets:
-        short_name = target.rsplit("|", 1)[-1]
-        if not short_name:
-            continue
-        segments = short_name.split(separator)
-        if len(segments) < num_rules:
-            results.append({
-                "node": target,
-                "detail": tr("detail_naming_segment_count").format(
-                    num_rules, len(segments)),
-            })
-            continue
-
-        for i, rule in enumerate(naming_rules):
-            mode = rule.get("mode", "any")
-            seg = segments[i]
-
-            if mode == "any":
-                continue
-            elif mode == "list":
-                allowed = rule.get("values", [])
-                if allowed and seg not in allowed:
-                    results.append({
-                        "node": target,
-                        "detail": tr("detail_naming_list_mismatch").format(
-                            i + 1, seg, ", ".join(allowed)),
-                    })
-                    break
-            elif mode == "number":
-                digits = rule.get("digits", 0)
-                if not seg.isdigit():
-                    results.append({
-                        "node": target,
-                        "detail": tr("detail_naming_not_number").format(
-                            i + 1, seg),
-                    })
-                    break
-                if digits > 0 and len(seg) != digits:
-                    results.append({
-                        "node": target,
-                        "detail": tr("detail_naming_digit_mismatch").format(
-                            i + 1, digits, len(seg)),
-                    })
-                    break
-
-    return results
-
 
 def check_file_paths(scene_folder="scenes", tex_folder="sourceimages",
                      expected_path_type="relative", check_missing=True):
@@ -1283,9 +2030,107 @@ def check_file_paths(scene_folder="scenes", tex_folder="sourceimages",
         r.pop("_sort", None)
 
     return results
+
+
+# -- Fix functions (Phase B: B-4) ------------------------------------------
+
+def fix_referenced_nodes(nodes):
+    """Import references into the scene. IRREVERSIBLE."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            ref_file = cmds.referenceQuery(node, filename=True)
+            cmds.file(ref_file, importReference=True)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_referenced_nodes: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
+
+
+def fix_unknown_nodes(nodes):
+    """Delete unknown plugin nodes. Undo-safe."""
+    fixed = 0
+    failed = 0
+    for node in nodes:
+        if not cmds.objExists(node):
+            failed += 1
+            continue
+        try:
+            locked = cmds.lockNode(node, query=True, lock=True)
+            if locked and locked[0]:
+                cmds.lockNode(node, lock=False)
+            cmds.delete(node)
+            fixed += 1
+        except Exception as exc:
+            log.warning("fix_unknown_nodes: %s failed: %s", node, exc)
+            failed += 1
+    return fixed, failed
 # ---------------------------------------------------------------------------
 # [800] ui — Main Window, Results Window, Help Dialog, Category UI
 # ---------------------------------------------------------------------------
+
+# Fix dispatch map (key -> fix function)
+_FIX_DISPATCH = {
+    "transform": fix_transform,
+    "smooth_preview": fix_smooth_preview,
+    "instances": fix_instances,
+    "intermediate_objects": fix_intermediate_objects,
+    "unused_nodes": fix_unused_nodes,
+    "unused_mat": fix_unused_mat,
+    "unused_layers": fix_unused_layers,
+    "empty_sets": fix_empty_sets,
+    "unknown_nodes": fix_unknown_nodes,
+    "history": fix_history,
+    "vertex_tweaks": fix_vertex_tweaks,
+    "namespaces": fix_namespaces,
+    "referenced_nodes": fix_referenced_nodes,
+}
+
+# Risk text colors for right-panel node rows
+_RISK_TEXT_COLORS = {
+    _RISK_HIGH:   "#ff4444",
+    _RISK_MEDIUM: "#ffaa00",
+}
+
+# (Warning bar styles removed — risk info now shown in confirmation dialogs)
+
+# Fallback risk messages (legacy — now empty; unified default in _on_item_selected)
+_RISK_FALLBACK = {}
+
+def _risk_sort_key(e):
+    """Sort key: no-risk first, then group by risk type."""
+    return (bool(e.get("risks")), (e.get("risks") or [""])[0])
+
+# Preview dispatch for right-panel risk display (lazy evaluation)
+_RISK_PREVIEW_DISPATCH = {
+    "transform":            preview_transform,
+    "vertex_tweaks":        preview_vertex_tweaks,
+    "instances":            preview_instances,
+    "intermediate_objects": preview_intermediate_objects,
+    "unused_nodes":         preview_unused_nodes,
+}
+
+# Utility: show QMessageBox without built-in icon.
+# Text-level emoji in tr() strings serves as the visual indicator.
+# Inherits parent QSS (dark theme + custom buttons) via parent arg.
+def _show_msgbox(parent, icon_type, title, text, buttons=None, default_btn=None):
+    if buttons is None:
+        buttons = QtWidgets.QMessageBox.Ok
+    if default_btn is None:
+        default_btn = buttons
+    # icon_type is accepted for call-site readability (semantic intent)
+    # but not passed to QMessageBox to suppress the built-in icon.
+    mb = QtWidgets.QMessageBox(parent)
+    mb.setWindowTitle(title)
+    mb.setText(text)
+    mb.setStandardButtons(buttons)
+    mb.setDefaultButton(default_btn)
+    return mb.exec_()
 
 # ===== Utility Widgets =====================================================
 
@@ -1293,340 +2138,6 @@ class NoScrollComboBox(QtWidgets.QComboBox):
     """QComboBox that ignores scroll-wheel events."""
     def wheelEvent(self, event):
         event.ignore()
-
-
-# ===== NamingRuleBuilder ===================================================
-
-_NAMING_MODES = ["list", "any", "number"]
-
-
-class NamingSegmentBox(QtWidgets.QFrame):
-    """Single segment box in the naming rule builder.
-
-    Each box has a fixed mode ('list', 'any', or 'number') determined
-    at creation time.  Two-row layout:
-      Top row: [mode label] [x button]
-      Bottom row: [content widget]
-    """
-
-    _LABEL_KEYS = {"list": "naming_label_list",
-                   "any": "naming_label_any",
-                   "number": "naming_label_number"}
-
-    def __init__(self, mode="list", on_remove=None, on_changed=None,
-                 parent=None):
-        super(NamingSegmentBox, self).__init__(parent)
-        self._mode = mode if mode in _NAMING_MODES else "list"
-        self._on_remove = on_remove
-        self._on_changed = on_changed
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.setFixedWidth(94)
-        self.setFixedHeight(58)
-        self.setStyleSheet(
-            "NamingSegmentBox {"
-            "  background-color: transparent;"
-            "}"
-        )
-
-        # Two-row layout: top [label][x], bottom [content]
-        main = QtWidgets.QVBoxLayout(self)
-        main.setContentsMargins(2, 2, 2, 2)
-        main.setSpacing(2)
-
-        # -- Top row: mode label + remove button --
-        top_row = QtWidgets.QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(2)
-
-        self._mode_label = QtWidgets.QLabel(
-            tr(self._LABEL_KEYS[self._mode]))
-        self._mode_label.setStyleSheet(
-            "color: #888888; font-size: 10px; font-weight: bold;"
-        )
-        top_row.addWidget(self._mode_label)
-        top_row.addStretch()
-
-        self._btn_remove = QtWidgets.QPushButton("✕")
-        self._btn_remove.setProperty("cssClass", "secondary")
-        self._btn_remove.setFixedSize(16, 16)
-        self._btn_remove.setStyleSheet(
-            "QPushButton { font-size: 10px; padding: 0; }"
-        )
-        self._btn_remove.clicked.connect(self._handle_remove)
-        top_row.addWidget(self._btn_remove)
-        main.addLayout(top_row)
-
-        # -- Bottom row: content --
-        self._list_edit = None
-        self._digits_edit = None
-        self._any_label = None
-
-        if self._mode == "list":
-            self._list_edit = QtWidgets.QPlainTextEdit()
-            self._list_edit.setPlaceholderText("chr\nprop")
-            self._list_edit.setMaximumHeight(34)
-            self._list_edit.setStyleSheet(
-                "QPlainTextEdit {"
-                "  background-color: #3c3c3c;"
-                "  color: #e0e0e0;"
-                "  border: 1px solid #555555;"
-                "  border-radius: 4px;"
-                "  font-size: 11px;"
-                "}"
-            )
-            self._list_edit.textChanged.connect(self._notify_changed)
-            main.addWidget(self._list_edit)
-
-        elif self._mode == "any":
-            self._any_label = QtWidgets.QLabel("***")
-            self._any_label.setAlignment(QtCore.Qt.AlignCenter)
-            self._any_label.setStyleSheet(
-                "color: #666666; font-size: 12px; font-weight: bold;"
-                " border: 1px dashed #555555; border-radius: 3px;"
-                " padding: 4px 0;"
-            )
-            main.addWidget(self._any_label, 0, QtCore.Qt.AlignTop)
-
-        elif self._mode == "number":
-            self._digits_edit = QtWidgets.QLineEdit()
-            self._digits_edit.setPlaceholderText(
-                tr("naming_digits_placeholder"))
-            self._digits_edit.setAlignment(QtCore.Qt.AlignCenter)
-            self._digits_edit.setStyleSheet(
-                "QLineEdit {"
-                "  background-color: #3c3c3c;"
-                "  color: #e0e0e0;"
-                "  border: 1px solid #555555;"
-                "  border-radius: 4px;"
-                "  font-size: 11px;"
-                "}"
-            )
-            self._digits_edit.setValidator(
-                QtGui.QIntValidator(1, 9))
-            self._digits_edit.textChanged.connect(self._notify_changed)
-            main.addWidget(self._digits_edit, 0, QtCore.Qt.AlignTop)
-
-    def _handle_remove(self):
-        if self._on_remove:
-            self._on_remove(self)
-
-    def _notify_changed(self):
-        if self._on_changed:
-            self._on_changed()
-
-    def get_mode(self):
-        """Return the fixed mode string."""
-        return self._mode
-
-    def get_rule(self):
-        """Return rule dict for this segment."""
-        if self._mode == "list" and self._list_edit is not None:
-            text = self._list_edit.toPlainText().strip()
-            values = [v.strip() for v in text.split("\n") if v.strip()]
-            return {"mode": "list", "values": values, "digits": 0}
-        elif self._mode == "number":
-            text = self._digits_edit.text().strip() if self._digits_edit else ""
-            digits = int(text) if text.isdigit() and int(text) > 0 else 0
-            return {"mode": "number", "values": [], "digits": digits}
-        return {"mode": "any", "values": [], "digits": 0}
-
-    def retranslate(self):
-        """Update labels for current language."""
-        self._mode_label.setText(tr(self._LABEL_KEYS[self._mode]))
-        if self._digits_edit is not None:
-            self._digits_edit.setPlaceholderText(
-                tr("naming_digits_placeholder"))
-
-    def reset(self):
-        """Reset content (mode stays fixed)."""
-        if self._list_edit is not None:
-            self._list_edit.clear()
-        if self._digits_edit is not None:
-            self._digits_edit.clear()
-
-
-class NamingRuleBuilder(QtWidgets.QWidget):
-    """Build naming rules as connected segment boxes."""
-
-    def __init__(self, parent=None):
-        super(NamingRuleBuilder, self).__init__(parent)
-        self._boxes = []
-
-        main_lay = QtWidgets.QVBoxLayout(self)
-        main_lay.setContentsMargins(0, 0, 0, 0)
-        main_lay.setSpacing(4)
-
-        # Top row: [+ List] [+ Any] [+ Number] on left, sep: [_] on right
-        top_row = QtWidgets.QHBoxLayout()
-        top_row.setSpacing(4)
-        self._btn_add_list = QtWidgets.QPushButton(tr("naming_add_list"))
-        self._btn_add_list.setProperty("cssClass", "secondary")
-        self._btn_add_list.clicked.connect(lambda: self._add_box("list"))
-        top_row.addWidget(self._btn_add_list)
-        self._btn_add_any = QtWidgets.QPushButton(tr("naming_add_any"))
-        self._btn_add_any.setProperty("cssClass", "secondary")
-        self._btn_add_any.clicked.connect(lambda: self._add_box("any"))
-        top_row.addWidget(self._btn_add_any)
-        self._btn_add_number = QtWidgets.QPushButton(tr("naming_add_number"))
-        self._btn_add_number.setProperty("cssClass", "secondary")
-        self._btn_add_number.clicked.connect(lambda: self._add_box("number"))
-        top_row.addWidget(self._btn_add_number)
-        top_row.addSpacing(12)
-        self._sep_label = QtWidgets.QLabel(tr("naming_sep_label"))
-        self._sep_label.setStyleSheet("color: #888888; font-size: 11px;")
-        self._sep_edit = QtWidgets.QLineEdit("_")
-        self._sep_edit.setFixedWidth(30)
-        self._sep_edit.setAlignment(QtCore.Qt.AlignCenter)
-        self._sep_edit.setStyleSheet("font-size: 11px;")
-        self._sep_edit.textChanged.connect(self._update_preview)
-        top_row.addWidget(self._sep_label)
-        top_row.addWidget(self._sep_edit)
-        top_row.addStretch()
-        main_lay.addLayout(top_row)
-
-        # Scrollable box area
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll.setFixedHeight(76)
-        self._box_container = QtWidgets.QWidget()
-        self._box_container.setFixedHeight(62)
-        self._box_container.setStyleSheet(
-            "background-color: #353535;"
-        )
-        self._box_layout = QtWidgets.QHBoxLayout(self._box_container)
-        self._box_layout.setContentsMargins(0, 0, 0, 0)
-        self._box_layout.setSpacing(0)
-        self._box_layout.addStretch()
-        scroll.setWidget(self._box_container)
-        main_lay.addWidget(scroll)
-
-        # Preview label
-        self._preview_label = QtWidgets.QLabel("")
-        self._preview_label.setStyleSheet(
-            "color: #44aa44; font-size: 11px; padding: 0 2px;"
-        )
-        self._preview_label.setVisible(False)
-        main_lay.addWidget(self._preview_label)
-
-    def _add_box(self, mode="list"):
-        """Add a new segment box with the given mode."""
-        box = NamingSegmentBox(
-            mode=mode,
-            on_remove=self._remove_box,
-            on_changed=self._update_preview,
-        )
-        self._boxes.append(box)
-        self._refresh_layout()
-        self._update_preview()
-
-    def _remove_box(self, box):
-        """Remove a segment box."""
-        if box in self._boxes:
-            self._boxes.remove(box)
-            box.setParent(None)
-            box.deleteLater()
-            self._refresh_layout()
-            self._update_preview()
-
-    def _refresh_layout(self):
-        """Rebuild box layout from self._boxes."""
-        while self._box_layout.count():
-            item = self._box_layout.takeAt(0)
-            w = item.widget()
-            if w and getattr(w, "_is_sep", False):
-                w.setParent(None)
-                w.deleteLater()
-
-        sep_text = self._sep_edit.text() or "_"
-        for i, box in enumerate(self._boxes):
-            if i > 0:
-                sep = QtWidgets.QLabel(sep_text)
-                sep.setStyleSheet(
-                    "color: #888888; font-size: 14px;"
-                    " font-weight: bold; padding: 0 2px;"
-                )
-                sep._is_sep = True
-                self._box_layout.addWidget(sep)
-            self._box_layout.addWidget(box)
-        self._box_layout.addStretch()
-
-    def _update_preview(self):
-        """Update the OK-pattern preview label."""
-        if not self._boxes:
-            self._preview_label.setVisible(False)
-            return
-        self._preview_label.setVisible(True)
-        sep = self._sep_edit.text() or "_"
-
-        # Collect per-box values for preview
-        box_values = []
-        for box in self._boxes:
-            rule = box.get_rule()
-            if rule["mode"] == "list":
-                values = rule["values"]
-                box_values.append(values if values else ["???"])
-            elif rule["mode"] == "any":
-                box_values.append(["***"])
-            elif rule["mode"] == "number":
-                d = rule["digits"]
-                box_values.append(["0" * d if d > 0 else "###"])
-            else:
-                box_values.append(["***"])
-
-        # Generate examples from list combinations (max 3)
-        examples = []
-        if box_values:
-            list_box = None
-            for i, bv in enumerate(box_values):
-                if len(bv) > 1:
-                    list_box = i
-                    break
-            if list_box is not None:
-                for val in box_values[list_box][:3]:
-                    parts = []
-                    for j, bv in enumerate(box_values):
-                        if j == list_box:
-                            parts.append(val)
-                        else:
-                            parts.append(bv[0])
-                    examples.append(sep.join(parts))
-            else:
-                examples.append(sep.join(bv[0] for bv in box_values))
-
-        self._preview_label.setText(
-            tr("naming_preview_prefix") + " " + ", ".join(examples)
-        )
-
-    def get_rules(self):
-        """Return list of rule dicts."""
-        return [b.get_rule() for b in self._boxes]
-
-    def get_separator(self):
-        """Return separator string."""
-        return self._sep_edit.text() or "_"
-
-    def reset(self):
-        """Remove all boxes, reset separator."""
-        for box in self._boxes:
-            box.setParent(None)
-            box.deleteLater()
-        self._boxes = []
-        self._refresh_layout()
-        self._sep_edit.setText("_")
-        self._update_preview()
-
-    def retranslate(self):
-        """Update labels for current language."""
-        self._btn_add_list.setText(tr("naming_add_list"))
-        self._btn_add_any.setText(tr("naming_add_any"))
-        self._btn_add_number.setText(tr("naming_add_number"))
-        self._sep_label.setText(tr("naming_sep_label"))
-        for box in self._boxes:
-            box.retranslate()
-        self._update_preview()
 
 
 # ===== CheckCategory =================================================
@@ -1703,32 +2214,161 @@ class CheckCategory(QtWidgets.QWidget):
                 cb.setChecked(default_on)
 
 
+# ===== ReadmeWorker =========================================================
+
+class ReadmeWorker(QtCore.QThread):
+    """Fetch README.md from GitHub in a background thread."""
+    finished = QtCore.Signal(str, str, str)  # (lang, markdown_text, error_message)
+
+    def __init__(self, url, lang, parent=None):
+        super(ReadmeWorker, self).__init__(parent)
+        self._url = url
+        self._lang = lang
+
+    def run(self):
+        try:
+            req = Request(self._url)
+            req.add_header("User-Agent", "Maya-SceneCleanupTools")
+            resp = urlopen(req, timeout=10)
+            data = resp.read()
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+            self.finished.emit(self._lang, data, "")
+        except URLError as e:
+            self.finished.emit(self._lang, "", str(e))
+        except Exception as e:
+            self.finished.emit(self._lang, "", str(e))
+
+
+# ===== Web view import (QWebEngineView / QWebView auto-detect) ==============
+
+_WebView = None
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView as _WebView
+except ImportError:
+    pass
+if _WebView is None:
+    try:
+        from PySide2.QtWebEngineWidgets import QWebEngineView as _WebView
+    except ImportError:
+        pass
+if _WebView is None:
+    try:
+        from PySide2.QtWebKitWidgets import QWebView as _WebView
+    except ImportError:
+        pass
+
+
 # ===== HelpDialog ==========================================================
 
 class HelpDialog(QtWidgets.QDialog):
-    """Simple HTML help dialog using QTextBrowser."""
+    """Help dialog that displays GitHub README via QWebView/QWebEngineView.
+
+    Falls back to QTextBrowser with static help HTML when no web view
+    widget is available or when the README fetch fails.
+    """
 
     def __init__(self, parent=None):
         super(HelpDialog, self).__init__(parent)
         self.setObjectName(HELP_DIALOG_OBJECT_NAME)
         self.setWindowTitle(tr("btn_howto"))
-        self.setMinimumSize(400, 480)
+        self.setMinimumSize(520, 560)
+        self.setStyleSheet(_QSS)
+
+        self._readme_cache = {}  # lang -> markdown_text
+        self._current_help_lang = None
+        self._worker = None
+        self._use_webview = _WebView is not None
+
         layout = QtWidgets.QVBoxLayout(self)
-        self._browser = QtWidgets.QTextBrowser()
-        self._browser.setOpenExternalLinks(True)
-        layout.addWidget(self._browser)
+
+        if self._use_webview:
+            self._view = _WebView()
+            layout.addWidget(self._view)
+        else:
+            self._view = QtWidgets.QTextBrowser()
+            self._view.setOpenExternalLinks(True)
+            layout.addWidget(self._view)
+
         btn_close = QtWidgets.QPushButton(tr("btn_close"))
         btn_close.clicked.connect(self.close)
         layout.addWidget(btn_close)
-        self._update_content()
 
-    def _update_content(self):
-        html = _HELP_HTML.get(_current_lang, _HELP_HTML.get("en", ""))
-        self._browser.setHtml(html)
+    def showEvent(self, event):
+        super(HelpDialog, self).showEvent(event)
+        self._load_for_lang(_current_lang)
+
+    def _load_for_lang(self, lang):
+        """Show README for the given language, fetching if needed."""
+        if self._current_help_lang == lang:
+            return
+        self._current_help_lang = lang
+
+        # Check cache first
+        cached = self._readme_cache.get(lang)
+        if cached:
+            self._render_readme(cached)
+            return
+
+        if not self._use_webview:
+            fallback = _HELP_FALLBACK_HTML.get(
+                lang, _HELP_FALLBACK_HTML.get("en", ""))
+            self._view.setHtml(fallback)
+            return
+
+        self._fetch_readme(lang)
+
+    def _fetch_readme(self, lang):
+        """Start async README fetch for the given language."""
+        self._view.setHtml(_HELP_LOADING_HTML)
+        url = _README_URLS.get(lang, _README_URLS.get("ja", ""))
+        self._worker = ReadmeWorker(url, lang, parent=self)
+        self._worker.finished.connect(self._on_readme_loaded)
+        self._worker.start()
+
+    def _on_readme_loaded(self, lang, markdown_text, error_msg):
+        """Handle README fetch result.
+
+        Caches successful results regardless of current language.
+        Only renders if lang still matches the active help language
+        (avoids race when user switches language mid-fetch).
+        """
+        self._worker = None
+        if error_msg or not markdown_text:
+            # Only show error if this is still the requested language
+            if lang == self._current_help_lang:
+                fallback = _HELP_FALLBACK_HTML.get(
+                    lang, _HELP_FALLBACK_HTML.get("en", ""))
+                err = error_msg or "Empty response from GitHub"
+                html = (_HELP_ERROR_TEMPLATE
+                        .replace("__ERROR_MSG__", err)
+                        .replace("__FALLBACK_HTML__", fallback))
+                self._view.setHtml(html)
+            return
+
+        self._readme_cache[lang] = markdown_text
+        # Only render if this is still the requested language
+        if lang == self._current_help_lang:
+            self._render_readme(markdown_text)
+
+    def _render_readme(self, markdown_text):
+        """Render README markdown via marked.js template."""
+        try:
+            encoded = _url_quote(markdown_text.encode("utf-8"), safe="")
+            html = (_HELP_RENDER_TEMPLATE
+                    .replace("__CDN_URL__", _MARKED_CDN)
+                    .replace("__ENCODED_MD__", encoded))
+            self._view.setHtml(html)
+        except Exception as e:
+            log.warning("README render failed: %s", e)
+            fallback = _HELP_FALLBACK_HTML.get(
+                _current_lang, _HELP_FALLBACK_HTML.get("en", ""))
+            self._view.setHtml(fallback)
 
     def retranslate(self):
         self.setWindowTitle(tr("btn_howto"))
-        self._update_content()
+        # Re-load README for the new language
+        self._load_for_lang(_current_lang)
 
 
 # ===== ResultsWindow =======================================================
@@ -1741,7 +2381,7 @@ class ResultsWindow(QtWidgets.QDialog):
     """
 
     _BADGE_STYLE = (
-        "background-color:{bg}; color:{fg}; border-radius:8px;"
+        "background-color:{bg}; color:{fg}; border-radius:3px;"
         " padding:1px 6px; font-size:11px; font-weight:bold;"
     )
 
@@ -1749,12 +2389,15 @@ class ResultsWindow(QtWidgets.QDialog):
         super(ResultsWindow, self).__init__(parent)
         self.setObjectName(RESULTS_OBJECT_NAME)
         self.setWindowTitle(tr("results_title"))
-        self.setMinimumSize(520, 480)
+        self.setMinimumSize(800, 480)
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
         self.setStyleSheet(_QSS)
 
         self._results = results or {}
         self._ordered_keys = [k for k in _CANONICAL_ORDER if k in self._results]
+        self._current_key = None
+        self._fixed_nodes = set()
+        self._preview_cache = {}  # key -> True (already enriched)
         self._build_ui()
 
     # ------------------------------------------------------------------ build
@@ -1789,22 +2432,91 @@ class ResultsWindow(QtWidgets.QDialog):
 
         splitter.addWidget(left_widget)
 
-        # -- Right panel: node list --
+        # -- Right panel: description + node list --
         right_widget = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
+        right_layout.setSpacing(4)
 
-        self._node_list = QtWidgets.QListWidget()
-        self._node_list.setSelectionMode(
+        # Item name label
+        self._item_name_label = QtWidgets.QLabel("")
+        self._item_name_label.setStyleSheet(
+            "font-size: 14px; font-weight: bold; padding: 6px 6px 0 6px;"
+        )
+        right_layout.addWidget(self._item_name_label)
+
+        # Item description label
+        self._item_desc_label = QtWidgets.QLabel("")
+        self._item_desc_label.setWordWrap(True)
+        self._item_desc_label.setStyleSheet(
+            "font-size: 11px; color: #aaaaaa; padding: 0 6px 4px 6px;"
+        )
+        right_layout.addWidget(self._item_desc_label)
+
+        # Separator line
+        sep_line = QtWidgets.QFrame()
+        sep_line.setFrameShape(QtWidgets.QFrame.HLine)
+        sep_line.setStyleSheet("color: #444444;")
+        right_layout.addWidget(sep_line)
+
+        self._node_table = QtWidgets.QTableWidget()
+        self._node_table.setColumnCount(4)
+        self._node_table.setHorizontalHeaderLabels(
+            ["", tr("results_node_col"), tr("results_detail_col"),
+             tr("risk_dep_col")]
+        )
+        _header = self._node_table.horizontalHeader()
+        _header.setStretchLastSection(True)
+        _header.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Fixed
+        )
+        _header.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.Interactive
+        )
+        _header.setSectionResizeMode(
+            2, QtWidgets.QHeaderView.Interactive
+        )
+        self._node_table.setColumnWidth(0, 24)
+        self._node_table.setColumnWidth(1, 140)
+        self._node_table.setColumnWidth(2, 140)
+        self._node_table.verticalHeader().setVisible(False)
+        self._node_table.verticalHeader().setDefaultSectionSize(22)
+        self._node_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self._node_table.setSelectionMode(
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
-        self._node_list.itemClicked.connect(self._on_node_clicked)
-        right_layout.addWidget(self._node_list)
+        self._node_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self._node_table.cellClicked.connect(self._on_node_clicked)
+        right_layout.addWidget(self._node_table, 1)
+
+        # Header checkbox overlay (same widget as cell checkboxes)
+        _header = self._node_table.horizontalHeader()
+        self._header_cb_container = QtWidgets.QWidget(_header)
+        _hcb_lay = QtWidgets.QHBoxLayout(self._header_cb_container)
+        _hcb_lay.setContentsMargins(0, 0, 0, 0)
+        _hcb_lay.setAlignment(QtCore.Qt.AlignCenter)
+        self._header_cb = QtWidgets.QCheckBox()
+        self._header_cb.setFixedSize(16, 16)
+        self._header_cb.stateChanged.connect(self._on_fix_select_all)
+        _hcb_lay.addWidget(self._header_cb)
+        self._header_cb_container.setVisible(False)
+
+        # Fix button (right panel bottom, shown only for fixable items)
+        self._btn_fix_checked = QtWidgets.QPushButton(tr("btn_fix_selected"))
+        self._btn_fix_checked.setProperty("cssClass", "accent")
+        self._btn_fix_checked.setVisible(False)
+        self._btn_fix_checked.clicked.connect(self._on_fix_checked)
+        right_layout.addWidget(self._btn_fix_checked)
 
         splitter.addWidget(right_widget)
 
-        splitter.setSizes([190, 330])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([190, 610])
         root.addWidget(splitter, stretch=1)
 
         # --- Populate left panel ---
@@ -1825,24 +2537,33 @@ class ResultsWindow(QtWidgets.QDialog):
         root.addLayout(btn_layout)
 
     # ------------------------------------------------------------- left panel
+    def _unfixed_count(self, entries):
+        """Return number of entries whose node is not yet fixed."""
+        return sum(
+            1 for e in entries
+            if e.get("node") not in self._fixed_nodes
+        )
+
     def _populate_item_list(self):
         self._item_list.clear()
 
-        # "All" row
-        total = sum(len(v) for v in self._results.values())
+        # "All" row (badge = unfixed count)
+        total = sum(
+            self._unfixed_count(v) for v in self._results.values()
+        )
         all_item = QtWidgets.QListWidgetItem()
         all_widget = self._make_item_row(tr("results_all"), total, is_all=True)
         all_item.setSizeHint(all_widget.sizeHint())
         self._item_list.addItem(all_item)
         self._item_list.setItemWidget(all_item, all_widget)
 
-        # Per-check rows
+        # Per-check rows (badge = unfixed count)
         for key in self._ordered_keys:
-            items = self._results[key]
+            entries = self._results[key]
             label = tr("chk_" + key)
-            count = len(items)
+            count = self._unfixed_count(entries)
             row_item = QtWidgets.QListWidgetItem()
-            row_widget = self._make_item_row(label, count)
+            row_widget = self._make_item_row(label, count, check_key=key)
             row_item.setSizeHint(row_widget.sizeHint())
             if count == 0:
                 row_widget.setEnabled(False)
@@ -1852,12 +2573,12 @@ class ResultsWindow(QtWidgets.QDialog):
         # Select "All" by default
         self._item_list.setCurrentRow(0)
 
-    def _make_item_row(self, label_text, count, is_all=False):
-        """Create a widget row with label + count badge."""
+    def _make_item_row(self, label_text, count, is_all=False, check_key=None):
+        """Create a widget row with label + count badge (no risk badges)."""
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(widget)
         layout.setContentsMargins(6, 3, 6, 3)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
         lbl = QtWidgets.QLabel(label_text)
         lbl.setMinimumWidth(0)
@@ -1882,40 +2603,199 @@ class ResultsWindow(QtWidgets.QDialog):
 
         return widget
 
-    # --------------------------------------------------------- node display
-    @staticmethod
-    def _format_node_display(entry):
-        """Return display string for a result entry."""
+    # ------------------------------------------------------------ right panel
+    def _make_fixed_icon_widget(self):
+        """Create a small check-mark icon widget for fixed nodes."""
+        icon_w = QtWidgets.QWidget()
+        icon_lay = QtWidgets.QHBoxLayout(icon_w)
+        icon_lay.setContentsMargins(0, 0, 0, 0)
+        icon_lay.setAlignment(QtCore.Qt.AlignCenter)
+        icon_lbl = QtWidgets.QLabel("✅")
+        icon_lbl.setFixedSize(16, 16)
+        icon_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        icon_lay.addWidget(icon_lbl)
+        return icon_w
+
+    def _add_node_row(self, entry, fixable=False, check_key=None,
+                      default_checked=True):
+        """Append a single node row to the table.
+
+        Args:
+            entry: dict with 'node', 'detail', and optional 'risks' list.
+            fixable: whether to show a fix checkbox.
+            check_key: the check item key (used to look up risk level).
+            default_checked: default state for the fix checkbox.
+        """
+        row = self._node_table.rowCount()
+        self._node_table.insertRow(row)
         node = entry.get("node", "")
         short_name = node.rsplit("|", 1)[-1] if node else node
         detail = entry.get("detail", "")
-        return "{n} | {d}".format(n=short_name, d=detail) if detail else short_name
+        risks = entry.get("risks", [])
+        is_fixed = node in self._fixed_nodes
 
-    # ------------------------------------------------------------ right panel
+        # Determine risk color for this row
+        risk_level = _RISK_LEVELS.get(check_key) if check_key else None
+        risk_color = _RISK_TEXT_COLORS.get(risk_level) if risk_level else None
+
+        # Column 1: node name (plain text — no icon or color)
+        node_item = QtWidgets.QTableWidgetItem(short_name)
+        node_item.setData(QtCore.Qt.UserRole, node)
+        if is_fixed:
+            node_item.setForeground(QtGui.QColor("#888888"))
+        self._node_table.setItem(row, 1, node_item)
+
+        # Column 2: detail (plain — no risk info)
+        detail_item = QtWidgets.QTableWidgetItem(detail)
+        if is_fixed:
+            detail_item.setForeground(QtGui.QColor("#888888"))
+        self._node_table.setItem(row, 2, detail_item)
+
+        # Column 3: dependencies / risks + info (⚠ prefix for risk rows)
+        info = entry.get("info", [])
+        display_items = list(risks) + list(info)
+        if risks:
+            risk_text = "⚠ " + " | ".join(display_items)
+        elif display_items:
+            risk_text = " | ".join(display_items)
+        else:
+            risk_text = ""
+        risk_item = QtWidgets.QTableWidgetItem(risk_text)
+        if is_fixed:
+            risk_item.setForeground(QtGui.QColor("#888888"))
+        elif risks and risk_color:
+            risk_item.setForeground(QtGui.QColor(risk_color))
+        elif info:
+            risk_item.setForeground(QtGui.QColor("#999999"))
+        self._node_table.setItem(row, 3, risk_item)
+
+        # Column 0: check-mark icon (fixed) or checkbox (fixable)
+        if is_fixed:
+            self._node_table.setCellWidget(row, 0, self._make_fixed_icon_widget())
+        elif fixable:
+            cb_widget = QtWidgets.QWidget()
+            cb_lay = QtWidgets.QHBoxLayout(cb_widget)
+            cb_lay.setContentsMargins(0, 0, 0, 0)
+            cb_lay.setAlignment(QtCore.Qt.AlignCenter)
+            cb = QtWidgets.QCheckBox()
+            cb.setFixedSize(16, 16)
+            cb.setChecked(default_checked)
+            cb.stateChanged.connect(self._on_node_cb_changed)
+            cb_lay.addWidget(cb)
+            cb_widget._cb = cb
+            cb_widget._has_risk = bool(risks)
+            self._node_table.setCellWidget(row, 0, cb_widget)
     def _on_item_selected(self, row):
         """Update right panel when left-panel selection changes."""
-        self._node_list.clear()
+        self._node_table.blockSignals(True)
+        self._node_table.setRowCount(0)
+        self._current_key = None
+        fixable = False
 
         # row == 0  -> "All" row selected
         # row == -1 -> selection cleared (e.g. during list rebuild); treat as "All"
         if row <= 0:
+            self._item_name_label.setText(tr("results_all"))
+            self._item_desc_label.setText(tr("desc_all"))
             self._populate_all_nodes()
         else:
             # Specific check item
             key_index = row - 1
             if key_index < len(self._ordered_keys):
                 key = self._ordered_keys[key_index]
+                self._current_key = key
+                fixable = key in _FIX_CAPABLE
+                self._item_name_label.setText(tr("chk_" + key))
+                desc = tr("desc_" + key)
+                if fixable:
+                    desc += "\n" + tr("desc_fix_hint")
+                self._item_desc_label.setText(desc)
                 entries = self._results.get(key, [])
-                for entry in entries:
-                    display = self._format_node_display(entry)
-                    item = QtWidgets.QListWidgetItem(display)
-                    item.setData(QtCore.Qt.UserRole, entry.get("node", ""))
-                    self._node_list.addItem(item)
+                risk_level = _RISK_LEVELS.get(key)
+                # Lazy preview: enrich entries with per-node risk data
+                if (risk_level and risk_level != _RISK_LOW
+                        and key not in self._preview_cache):
+                    preview_fn = _RISK_PREVIEW_DISPATCH.get(key)
+                    if preview_fn is not None:
+                        try:
+                            node_list = [e["node"] for e in entries
+                                         if e.get("node")]
+                            previews = preview_fn(node_list)
+                            risk_map = {}
+                            for p in previews:
+                                risk_map[p["node"]] = {
+                                    "risks": p.get("risks", []),
+                                    "info": p.get("info", []),
+                                }
+                            for e in entries:
+                                data = risk_map.get(
+                                    e.get("node"), {})
+                                e["risks"] = data.get("risks", [])
+                                e["info"] = data.get("info", [])
+                        except Exception as exc:
+                            log.warning(
+                                "Preview failed for %s: %s", key, exc)
+                    else:
+                        # No preview function (high-risk items) — use
+                        # preflight per-node to populate risks.
+                        preflight_fn = _PREFLIGHT_DISPATCH.get(key)
+                        if preflight_fn is not None:
+                            for e in entries:
+                                node = e.get("node")
+                                if node:
+                                    try:
+                                        pf = preflight_fn([node])
+                                        e["risks"] = pf.get(
+                                            "warnings", [])
+                                        e["info"] = pf.get(
+                                            "info", [])
+                                    except Exception:
+                                        e["risks"] = []
+                                        e["info"] = []
+                    self._preview_cache[key] = True
+                # Fill entries with no risks and no info
+                if key in _FIX_CAPABLE:
+                    _default_msg = tr("risk_not_detected")
+                else:
+                    _default_msg = tr("risk_not_applicable")
+                for e in entries:
+                    if not e.get("risks") and not e.get("info"):
+                        e["info"] = [_default_msg]
+                # Sort: no-risk first, then risk nodes grouped by risk type
+                sorted_entries = sorted(entries, key=_risk_sort_key)
+                for entry in sorted_entries:
+                    has_node_risk = bool(entry.get("risks"))
+                    # Default check: ON for no-risk, OFF for risk
+                    default_on = not has_node_risk
+                    self._add_node_row(
+                        entry, fixable=fixable, check_key=key,
+                        default_checked=default_on,
+                    )
 
-        if self._node_list.count() == 0:
-            no_item = QtWidgets.QListWidgetItem(tr("results_no_issues"))
+        self._node_table.blockSignals(False)
+        has_nodes = self._node_table.rowCount() > 0
+        if fixable and has_nodes:
+            _h = self._node_table.horizontalHeader()
+            self._header_cb_container.setGeometry(
+                _h.sectionPosition(0), 0,
+                _h.sectionSize(0), _h.height()
+            )
+            self._header_cb.blockSignals(True)
+            self._header_cb.setChecked(False)
+            self._header_cb.blockSignals(False)
+            self._header_cb_container.setVisible(True)
+        else:
+            self._header_cb_container.setVisible(False)
+        self._btn_fix_checked.setVisible(fixable and has_nodes)
+        if fixable and has_nodes:
+            self._btn_fix_checked.setEnabled(True)
+
+        if self._node_table.rowCount() == 0:
+            self._node_table.setRowCount(1)
+            no_item = QtWidgets.QTableWidgetItem(tr("results_no_issues"))
             no_item.setFlags(no_item.flags() & ~QtCore.Qt.ItemIsSelectable)
-            self._node_list.addItem(no_item)
+            self._node_table.setItem(0, 0, no_item)
+            self._node_table.setSpan(0, 0, 1, 4)
 
     def _populate_all_nodes(self):
         """Show all nodes grouped by check-item headers."""
@@ -1923,30 +2803,315 @@ class ResultsWindow(QtWidgets.QDialog):
             entries = self._results.get(key, [])
             if not entries:
                 continue
+            # Lazy preview: enrich entries with per-node risk data
+            risk_level = _RISK_LEVELS.get(key)
+            if (risk_level and risk_level != _RISK_LOW
+                    and key not in self._preview_cache):
+                preview_fn = _RISK_PREVIEW_DISPATCH.get(key)
+                if preview_fn is not None:
+                    try:
+                        node_list = [e["node"] for e in entries
+                                     if e.get("node")]
+                        previews = preview_fn(node_list)
+                        risk_map = {}
+                        for p in previews:
+                            risk_map[p["node"]] = {
+                                "risks": p.get("risks", []),
+                                "info": p.get("info", []),
+                            }
+                        for e in entries:
+                            data = risk_map.get(
+                                e.get("node"), {})
+                            e["risks"] = data.get("risks", [])
+                            e["info"] = data.get("info", [])
+                    except Exception as exc:
+                        log.warning(
+                            "Preview failed for %s: %s", key, exc)
+                else:
+                    preflight_fn = _PREFLIGHT_DISPATCH.get(key)
+                    if preflight_fn is not None:
+                        for e in entries:
+                            node = e.get("node")
+                            if node:
+                                try:
+                                    pf = preflight_fn([node])
+                                    e["risks"] = pf.get(
+                                        "warnings", [])
+                                    e["info"] = pf.get(
+                                        "info", [])
+                                except Exception:
+                                    e["risks"] = []
+                                    e["info"] = []
+                self._preview_cache[key] = True
+            # Default info for entries with no risks and no info
+            if key in _FIX_CAPABLE:
+                _default_msg = tr("risk_not_detected")
+            else:
+                _default_msg = tr("risk_not_applicable")
+            for e in entries:
+                if not e.get("risks") and not e.get("info"):
+                    e["info"] = [_default_msg]
             label = tr("chk_" + key)
-            header_text = "\u2014 {label} ({count}) \u2014".format(
+            header_text = "\u25b6 {label} ({count})".format(
                 label=label, count=len(entries)
             )
-            header_item = QtWidgets.QListWidgetItem(header_text)
-            header_item.setFlags(header_item.flags() & ~QtCore.Qt.ItemIsSelectable)
+            row = self._node_table.rowCount()
+            self._node_table.insertRow(row)
+            header_item = QtWidgets.QTableWidgetItem(header_text)
+            header_item.setData(QtCore.Qt.UserRole + 1, key)
             f = header_item.font()
             f.setBold(True)
             header_item.setFont(f)
-            header_item.setForeground(QtGui.QColor("#888888"))
-            self._node_list.addItem(header_item)
-            for entry in entries:
-                display = self._format_node_display(entry)
-                item = QtWidgets.QListWidgetItem("  " + display)
-                item.setData(QtCore.Qt.UserRole, entry.get("node", ""))
-                self._node_list.addItem(item)
+            header_item.setForeground(QtGui.QColor("#7aa2f7"))
+            self._node_table.setItem(row, 0, header_item)
+            self._node_table.setSpan(row, 0, 1, 4)
+            sorted_entries = sorted(entries, key=_risk_sort_key)
+            for entry in sorted_entries:
+                self._add_node_row(entry, check_key=key)
 
-    def _on_node_clicked(self, item):
-        node = item.data(QtCore.Qt.UserRole)
-        if node:
-            try:
-                cmds.select(node, replace=True)
-            except Exception:
-                pass
+    # ------------------------------------------------------------ fix controls
+    def _on_fix_select_all(self, state):
+        """Toggle all node checkboxes via header checkbox.
+
+        When checking all, prompt confirmation if risk items exist.
+        """
+        checked = bool(state)
+        if checked:
+            # Check if any rows have risk
+            has_risk_rows = False
+            for r in range(self._node_table.rowCount()):
+                w = self._node_table.cellWidget(r, 0)
+                if w and hasattr(w, "_has_risk") and w._has_risk:
+                    has_risk_rows = True
+                    break
+            if has_risk_rows:
+                reply = _show_msgbox(self,
+                    QtWidgets.QMessageBox.Question,
+                    tr("fix_confirm_title"),
+                    tr("fix_select_all_risk_confirm"),
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No,
+                )
+                if reply != QtWidgets.QMessageBox.Yes:
+                    # Only check non-risk items
+                    for r in range(self._node_table.rowCount()):
+                        w = self._node_table.cellWidget(r, 0)
+                        if w and hasattr(w, "_cb"):
+                            w._cb.blockSignals(True)
+                            is_risky = getattr(w, "_has_risk", False)
+                            w._cb.setChecked(not is_risky)
+                            w._cb.blockSignals(False)
+                    self._header_cb.blockSignals(True)
+                    self._header_cb.setChecked(False)
+                    self._header_cb.blockSignals(False)
+                    return
+        for r in range(self._node_table.rowCount()):
+            w = self._node_table.cellWidget(r, 0)
+            if w and hasattr(w, "_cb"):
+                w._cb.blockSignals(True)
+                w._cb.setChecked(checked)
+                w._cb.blockSignals(False)
+
+    def _on_node_cb_changed(self, _state):
+        """Sync header checkbox when a node checkbox changes."""
+        all_checked = True
+        any_checked = False
+        for r in range(self._node_table.rowCount()):
+            w = self._node_table.cellWidget(r, 0)
+            if w and hasattr(w, "_cb"):
+                if w._cb.isChecked():
+                    any_checked = True
+                else:
+                    all_checked = False
+        self._header_cb.blockSignals(True)
+        self._header_cb.setChecked(all_checked and any_checked)
+        self._header_cb.blockSignals(False)
+
+    def _get_fix_checked_nodes(self):
+        """Return list of node paths that are checked for fixing."""
+        nodes = []
+        for r in range(self._node_table.rowCount()):
+            w = self._node_table.cellWidget(r, 0)
+            if w and hasattr(w, "_cb") and w._cb.isChecked():
+                node_item = self._node_table.item(r, 1)
+                if node_item:
+                    node = node_item.data(QtCore.Qt.UserRole)
+                    if node:
+                        nodes.append(node)
+        return nodes
+
+    def _on_fix_checked(self):
+        """Execute fix for checked nodes with confirmation and result dialogs."""
+        nodes = self._get_fix_checked_nodes()
+        if not nodes:
+            return
+        key = self._current_key
+        fix_fn = _FIX_DISPATCH.get(key)
+        if fix_fn is None:
+            return
+        risk_level = _RISK_LEVELS.get(key)
+
+        # Check if any selected nodes have risks
+        has_risky_nodes = False
+        for r in range(self._node_table.rowCount()):
+            cw = self._node_table.cellWidget(r, 0)
+            if cw and hasattr(cw, "_cb") and cw._cb.isChecked():
+                if getattr(cw, "_has_risk", False):
+                    has_risky_nodes = True
+                    break
+
+        # Build confirmation dialog based on risk level × detection
+        if risk_level == _RISK_HIGH:
+            if has_risky_nodes:
+                # High × detected: preflight warnings → 2-step
+                msg = ""
+                preflight_fn = _PREFLIGHT_DISPATCH.get(key)
+                if preflight_fn is not None:
+                    pf_result = preflight_fn(nodes)
+                    if not pf_result["safe"]:
+                        msg = tr("preflight_warn_header")
+                        for warning in pf_result["warnings"]:
+                            msg += "\n• " + warning
+                        msg += "\n\n"
+                if not _FIX_CAPABLE.get(key, True):
+                    msg += tr("fix_confirm_irreversible_warn") + "\n"
+                msg += tr("fix_confirm_msg", count=len(nodes))
+                reply = _show_msgbox(self,
+                    QtWidgets.QMessageBox.Warning, tr("fix_confirm_title"), msg,
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No)
+                if reply != QtWidgets.QMessageBox.Yes:
+                    return
+                # 2nd step
+                reply2 = _show_msgbox(self,
+                    QtWidgets.QMessageBox.Warning, tr("fix_confirm_title"),
+                    tr("warn_high_confirm"),
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No)
+                if reply2 != QtWidgets.QMessageBox.Yes:
+                    return
+            else:
+                # High × not detected: no risk → 1-step
+                msg = ""
+                if not _FIX_CAPABLE.get(key, True):
+                    msg = tr("fix_confirm_irreversible_warn") + "\n"
+                msg += tr("preflight_no_risk")
+                msg += "\n\n" + tr("fix_confirm_msg", count=len(nodes))
+                reply = _show_msgbox(self,
+                    QtWidgets.QMessageBox.Warning, tr("fix_confirm_title"), msg,
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No)
+                if reply != QtWidgets.QMessageBox.Yes:
+                    return
+        elif risk_level == _RISK_MEDIUM:
+            if has_risky_nodes:
+                # Medium × detected: risk list → 1-step
+                checked_set = set(nodes)
+                entries = self._results.get(key, [])
+                risk_texts = []
+                for e in entries:
+                    if e.get("node") in checked_set and e.get("risks"):
+                        for rt in e["risks"]:
+                            if rt not in risk_texts:
+                                risk_texts.append(rt)
+                msg = tr("preflight_warn_header")
+                for rt in risk_texts:
+                    msg += "\n• " + rt
+                msg += "\n\n" + tr("fix_confirm_msg", count=len(nodes))
+                if not _FIX_CAPABLE.get(key, True):
+                    msg += "\n" + tr("fix_confirm_irreversible_warn")
+                reply = _show_msgbox(self,
+                    QtWidgets.QMessageBox.Warning, tr("fix_confirm_title"), msg,
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No)
+                if reply != QtWidgets.QMessageBox.Yes:
+                    return
+            else:
+                # Medium × not detected: neutral + no risk → 1-step
+                msg = tr("preflight_no_risk")
+                msg += "\n\n" + tr("fix_confirm_neutral_msg", count=len(nodes))
+                if not _FIX_CAPABLE.get(key, True):
+                    msg += "\n" + tr("fix_confirm_irreversible_warn")
+                reply = _show_msgbox(self,
+                    QtWidgets.QMessageBox.Question, tr("fix_confirm_title"), msg,
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No)
+                if reply != QtWidgets.QMessageBox.Yes:
+                    return
+        else:
+            # Low risk: simple confirmation
+            msg = tr("fix_confirm_neutral_msg", count=len(nodes))
+            if not _FIX_CAPABLE.get(key, True):
+                msg += "\n\n" + tr("fix_confirm_irreversible_warn")
+            reply = _show_msgbox(self,
+                QtWidgets.QMessageBox.Question, tr("fix_confirm_title"), msg,
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No)
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+        cmds.undoInfo(openChunk=True, chunkName="SCT_fix_{0}".format(key))
+        try:
+            fixed, failed = fix_fn(nodes)
+        except Exception as exc:
+            log.error("Fix failed for %s: %s", key, exc)
+            fixed, failed = 0, len(nodes)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        # Result dialog
+        if failed == 0:
+            msg = tr("fix_result_success", count=fixed)
+        elif fixed == 0:
+            msg = tr("fix_result_all_failed", count=failed)
+        else:
+            msg = tr("fix_result_partial", fixed=fixed, failed=failed)
+        _show_msgbox(self,
+            QtWidgets.QMessageBox.Information,
+            tr("fix_result_title"),
+            msg,
+        )
+        # Record fixed nodes and rebuild UI (keep entries for checkmark display)
+        if fixed > 0:
+            fixed_paths = set()
+            for r in range(self._node_table.rowCount()):
+                cw = self._node_table.cellWidget(r, 0)
+                if cw and hasattr(cw, "_cb") and cw._cb.isChecked():
+                    node_item = self._node_table.item(r, 1)
+                    if node_item:
+                        node_path = node_item.data(QtCore.Qt.UserRole)
+                        if node_path:
+                            fixed_paths.add(node_path)
+                            self._fixed_nodes.add(node_path)
+            # Rebuild left panel (badges show unfixed count) and right panel
+            saved_key = self._current_key
+            self._populate_item_list()
+            # Restore selection to the same check item
+            for i in range(1, self._item_list.count()):
+                idx = i - 1
+                if idx < len(self._ordered_keys) and self._ordered_keys[idx] == saved_key:
+                    self._item_list.setCurrentRow(i)
+                    break
+            else:
+                self._item_list.setCurrentRow(0)
+
+    def _on_node_clicked(self, row, column):
+        # Check if this is a clickable header row (All view navigation)
+        header_item = self._node_table.item(row, 0)
+        if header_item:
+            check_key = header_item.data(QtCore.Qt.UserRole + 1)
+            if check_key:
+                for i, key in enumerate(self._ordered_keys):
+                    if key == check_key:
+                        self._item_list.setCurrentRow(i + 1)
+                        return
+        # Normal node click -> Maya select
+        item = self._node_table.item(row, 1)
+        if item:
+            node = item.data(QtCore.Qt.UserRole)
+            if node:
+                try:
+                    cmds.select(node, replace=True)
+                except Exception:
+                    pass
 
     # --------------------------------------------------------- Maya selection
     def _select_all_in_maya(self):
@@ -1964,7 +3129,12 @@ class ResultsWindow(QtWidgets.QDialog):
         return bool(self._results)
 
     def copy_report(self):
-        """Copy check results as plain text to clipboard."""
+        """Copy check results as plain text to clipboard and open feedback form.
+
+        Returns:
+            str: message key indicating the result ('report_form_opened',
+                 'report_url_too_long', or 'report_form_not_configured').
+        """
         lines = []
         for key in self._ordered_keys:
             items = self._results.get(key, [])
@@ -1991,21 +3161,28 @@ class ResultsWindow(QtWidgets.QDialog):
         text = "\n".join(lines)
         clipboard = QtWidgets.QApplication.clipboard()
         clipboard.setText(text)
-        self._summary_label.setText(tr("report_copied"))
+        success, msg_key = _open_feedback_form(text)
+        if not success:
+            self._summary_label.setText(tr(msg_key))
+            return msg_key
+        if msg_key == "report_url_too_long":
+            self._summary_label.setText(tr("report_url_too_long"))
+            return msg_key
+        self._summary_label.setText(tr("report_form_opened"))
+        return msg_key
 
 
 # ===== MainWindow ==========================================================
 
 # Check item definitions: (key, i18n_key, default_on, has_params)
-# --- Geometry (7) ---
+# --- Geometry (5) ---
 _CHECK_ITEMS_GEOMETRY = [
     ("history",              "chk_history",              True,  False),
     ("transform",            "chk_transform",            True,  False),
     ("vertex_tweaks",        "chk_vertex_tweaks",        True,  False),
     ("instances",            "chk_instances",             True,  False),
     ("smooth_preview",       "chk_smooth_preview",       True,  False),
-    ("shape_suffix",         "chk_shape_suffix",          True,  False),
-    ("duplicate_names",      "chk_duplicate_names",       True,  False),
+
 ]
 
 # --- Unused (6) ---
@@ -2018,12 +3195,12 @@ _CHECK_ITEMS_UNUSED = [
     ("namespaces",           "chk_namespaces",           True,  False),
 ]
 
-# --- Scene Environment (5) ---
+# --- Scene Environment (4) ---
 _CHECK_ITEMS_SCENE_ENV = [
     ("scene_units",          "chk_scene_units",          True,  True),
     ("unknown_nodes",        "chk_unknown_nodes",        True,  False),
     ("referenced_nodes",     "chk_referenced_nodes",     True,  False),
-    ("naming_check",         "chk_naming_check",         True,  True),
+
     ("file_paths",           "chk_file_paths",           True,  True),
 ]
 
@@ -2035,7 +3212,6 @@ _CANONICAL_ORDER = (
 
 _PARAM_DEFAULTS = {
     "scene_units":  {"unit": 0, "upaxis": 0},
-    "naming_check": {"rules": [], "separator": "_"},
     "file_paths":   {"scene": "scenes", "tex": "sourceimages",
                      "type": "relative", "missing": True},
 }
@@ -2183,17 +3359,7 @@ class MainWindow(QtWidgets.QDialog):
         """Create parameter widget(s) for items that need them."""
         container = QtWidgets.QWidget()
 
-        if key == "naming_check":
-            layout = QtWidgets.QVBoxLayout(container)
-            layout.setContentsMargins(8, 0, 0, 0)
-            layout.setSpacing(4)
-            builder = NamingRuleBuilder()
-            layout.addWidget(builder)
-            self._param_widgets[key] = {
-                "builder": builder,
-            }
-
-        elif key == "scene_units":
+        if key == "scene_units":
             layout = QtWidgets.QHBoxLayout(container)
             layout.setContentsMargins(8, 0, 0, 0)
             layout.setSpacing(4)
@@ -2281,9 +3447,6 @@ class MainWindow(QtWidgets.QDialog):
                 _PARAM_DEFAULTS["scene_units"]["unit"])
             pw["combo_axis"].setCurrentIndex(
                 _PARAM_DEFAULTS["scene_units"]["upaxis"])
-        pw = self._param_widgets.get("naming_check")
-        if pw:
-            pw["builder"].reset()
         pw = self._param_widgets.get("file_paths")
         if pw:
             d = _PARAM_DEFAULTS["file_paths"]
@@ -2371,11 +3534,6 @@ class MainWindow(QtWidgets.QDialog):
 
         # Gather params
         params = {}
-        pw = self._param_widgets.get("naming_check")
-        if pw:
-            builder = pw["builder"]
-            params["naming_rules"] = builder.get_rules()
-            params["naming_separator"] = builder.get_separator()
         pw = self._param_widgets.get("scene_units")
         if pw:
             params["expected_unit"] = pw["combo_unit"].currentText().lower()
@@ -2438,11 +3596,19 @@ class MainWindow(QtWidgets.QDialog):
     # === Send report ========================================================
 
     def _send_report(self):
-        """Copy latest check results to clipboard."""
+        """Copy latest check results to clipboard and open feedback form."""
         if not self._results_window or not self._results_window.has_results():
+            self._set_status(tr("report_empty"), "error")
+            self._schedule_status_reset()
             return
-        self._results_window.copy_report()
-        self._lbl_status.setText(tr("report_copied"))
+        msg_key = self._results_window.copy_report()
+        if msg_key == "report_url_too_long":
+            self._set_status(tr("report_url_too_long"), "error")
+        elif msg_key == "report_form_not_configured":
+            self._set_status(tr("report_form_not_configured"), "error")
+        else:
+            self._set_status(tr("report_form_opened"), "success")
+        self._schedule_status_reset()
 
     # === Help dialog ========================================================
 
@@ -2490,9 +3656,6 @@ class MainWindow(QtWidgets.QDialog):
         self._btn_reset.setText(tr("btn_reset"))
 
         # Param widgets
-        pw = self._param_widgets.get("naming_check")
-        if pw:
-            pw["builder"].retranslate()
         pw = self._param_widgets.get("scene_units")
         if pw:
             pw["label_unit"].setText(tr("unit_label"))
@@ -2525,8 +3688,7 @@ _CHECK_FUNC_MAP = {
     "vertex_tweaks":        check_vertex_tweaks,
     "instances":            check_instances,
     "smooth_preview":       check_smooth_preview,
-    "shape_suffix":         check_shape_suffix,
-    "duplicate_names":      check_duplicate_names,
+
     # Unused items
     "unused_nodes":         check_unused_nodes,
     "intermediate_objects": check_intermediate_objects,
@@ -2538,13 +3700,13 @@ _CHECK_FUNC_MAP = {
     "scene_units":          check_scene_units,
     "unknown_nodes":        check_unknown_nodes,
     "referenced_nodes":     check_referenced_nodes,
-    "naming_check":         check_naming_check,
+
     "file_paths":           check_file_paths,
 }
 
 _SCENE_WIDE_KEYS = {
     "unused_nodes", "unused_mat", "unused_layers", "empty_sets", "namespaces",
-    "unknown_nodes", "referenced_nodes", "duplicate_names", "scene_units",
+    "unknown_nodes", "referenced_nodes", "scene_units",
     "file_paths",
 }
 
@@ -2625,15 +3787,7 @@ class QCWorker(QtCore.QObject):
             else:
                 return func()
         else:
-            if key == "naming_check":
-                transforms = collect_transform_nodes()
-                return func(
-                    transforms,
-                    naming_rules=self._params.get("naming_rules", []),
-                    separator=self._params.get("naming_separator", "_"),
-                )
-            else:
-                return func(self._targets)
+            return func(self._targets)
 # ---------------------------------------------------------------------------
 # [900] entry — Entry point
 # ---------------------------------------------------------------------------
