@@ -39,7 +39,7 @@ _url_quote = url_quote
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.32.1"
+__VERSION__ = "0.32.2"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
@@ -2468,7 +2468,7 @@ class ResultsWindow(QtWidgets.QDialog):
         self._results = results or {}
         self._ordered_keys = [k for k in _CANONICAL_ORDER if k in self._results]
         self._current_key = None
-        self._fixed_nodes = set()
+        self._fixed_nodes = set()  # set of (check_key, node_path) tuples
         self._preview_cache = {}  # key -> True (already enriched)
         self._build_ui()
 
@@ -2609,11 +2609,11 @@ class ResultsWindow(QtWidgets.QDialog):
         root.addLayout(btn_layout)
 
     # ------------------------------------------------------------- left panel
-    def _unfixed_count(self, entries):
+    def _unfixed_count(self, check_key, entries):
         """Return number of entries whose node is not yet fixed."""
         return sum(
             1 for e in entries
-            if e.get("node") not in self._fixed_nodes
+            if (check_key, e.get("node")) not in self._fixed_nodes
         )
 
     def _populate_item_list(self):
@@ -2621,7 +2621,8 @@ class ResultsWindow(QtWidgets.QDialog):
 
         # "All" row (badge = unfixed count)
         total = sum(
-            self._unfixed_count(v) for v in self._results.values()
+            self._unfixed_count(key, self._results[key])
+            for key in self._ordered_keys
         )
         all_item = QtWidgets.QListWidgetItem()
         all_widget = self._make_item_row(tr("results_all"), total, is_all=True)
@@ -2633,7 +2634,7 @@ class ResultsWindow(QtWidgets.QDialog):
         for key in self._ordered_keys:
             entries = self._results[key]
             label = tr("chk_" + key)
-            count = self._unfixed_count(entries)
+            count = self._unfixed_count(key, entries)
             row_item = QtWidgets.QListWidgetItem()
             row_widget = self._make_item_row(label, count, check_key=key)
             row_item.setSizeHint(row_widget.sizeHint())
@@ -2704,7 +2705,7 @@ class ResultsWindow(QtWidgets.QDialog):
         short_name = node.rsplit("|", 1)[-1] if node else node
         detail = entry.get("detail", "")
         risks = entry.get("risks", [])
-        is_fixed = node in self._fixed_nodes
+        is_fixed = (check_key, node) in self._fixed_nodes
 
         # Determine risk color for this row
         risk_level = _RISK_LEVELS.get(check_key) if check_key else None
@@ -3152,7 +3153,7 @@ class ResultsWindow(QtWidgets.QDialog):
                         node_path = node_item.data(QtCore.Qt.UserRole)
                         if node_path:
                             fixed_paths.add(node_path)
-                            self._fixed_nodes.add(node_path)
+                            self._fixed_nodes.add((key, node_path))
             # Rebuild left panel (badges show unfixed count) and right panel
             saved_key = self._current_key
             self._populate_item_list()

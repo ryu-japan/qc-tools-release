@@ -24,9 +24,9 @@
     "released_at": "2026-04-06T05:37:38Z"
   },
   "scene_cleanup_tools": {
-    "version": "0.32.1",
+    "version": "0.32.2",
     "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/scene_cleanup_tools/scene_cleanup_tools.py",
-    "sha256": "0c4d5c3dbba50256f69c51f7927281b73ddc7c604ed9206c45d98beb887ba064",
-    "released_at": "2026-04-11T05:29:44Z"
+    "sha256": "151bad84e53948a639757200bc8c693779ea4a657eac2dce776e9b12ee732e15",
+    "released_at": "2026-04-11T06:35:26Z"
   }
 }
