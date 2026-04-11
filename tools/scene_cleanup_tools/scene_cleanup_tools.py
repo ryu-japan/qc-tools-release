@@ -39,7 +39,7 @@ _url_quote = url_quote
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.32.0"
+__VERSION__ = "0.32.1"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
@@ -3200,13 +3200,8 @@ class ResultsWindow(QtWidgets.QDialog):
         """Return True if there are any check results."""
         return bool(self._results)
 
-    def copy_report(self):
-        """Copy check results as plain text to clipboard and open feedback form.
-
-        Returns:
-            str: message key indicating the result ('report_form_opened',
-                 'report_url_too_long', or 'report_form_not_configured').
-        """
+    def _build_report_text(self):
+        """Build plain-text report from check results."""
         lines = []
         for key in self._ordered_keys:
             items = self._results.get(key, [])
@@ -3230,18 +3225,14 @@ class ResultsWindow(QtWidgets.QDialog):
                     label=label,
                     pass_text=tr("results_pass"),
                 ))
-        text = "\n".join(lines)
+        return "\n".join(lines)
+
+    def copy_report(self):
+        """Copy check results as plain text to clipboard."""
+        text = self._build_report_text()
         clipboard = QtWidgets.QApplication.clipboard()
         clipboard.setText(text)
-        success, msg_key = _open_feedback_form(text)
-        if not success:
-            self._summary_label.setText(tr(msg_key))
-            return msg_key
-        if msg_key == "report_url_too_long":
-            self._summary_label.setText(tr("report_url_too_long"))
-            return msg_key
-        self._summary_label.setText(tr("report_form_opened"))
-        return msg_key
+        self._summary_label.setText(tr("report_copied"))
 
 
 # ===== MainWindow ==========================================================
@@ -3668,16 +3659,19 @@ class MainWindow(QtWidgets.QDialog):
     # === Send report ========================================================
 
     def _send_report(self):
-        """Copy latest check results to clipboard and open feedback form."""
+        """Build report, copy to clipboard and open feedback form."""
         if not self._results_window or not self._results_window.has_results():
             self._set_status(tr("report_empty"), "error")
             self._schedule_status_reset()
             return
-        msg_key = self._results_window.copy_report()
-        if msg_key == "report_url_too_long":
+        text = self._results_window._build_report_text()
+        clipboard = QtWidgets.QApplication.clipboard()
+        clipboard.setText(text)
+        success, msg_key = _open_feedback_form(text)
+        if not success:
+            self._set_status(tr(msg_key), "error")
+        elif msg_key == "report_url_too_long":
             self._set_status(tr("report_url_too_long"), "error")
-        elif msg_key == "report_form_not_configured":
-            self._set_status(tr("report_form_not_configured"), "error")
         else:
             self._set_status(tr("report_form_opened"), "success")
         self._schedule_status_reset()
