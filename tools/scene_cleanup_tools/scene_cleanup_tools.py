@@ -39,7 +39,7 @@ _url_quote = url_quote
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-__VERSION__ = "0.31.1"
+__VERSION__ = "0.32.0"
 WINDOW_TITLE = "Scene Cleanup Tools"
 WINDOW_OBJECT_NAME = "sceneCleanupToolsWindow"
 RESULTS_OBJECT_NAME = "sceneCleanupResultsWindow"
@@ -490,6 +490,14 @@ _TR = {
     "preview_warn_deformer_break":{"en": "Deformer connected — removal may break deformation", "ja": "デフォーマ接続中 — 削除すると変形が壊れる可能性"},
     "preview_warn_custom_attr":  {"en": "Custom attribute connected — deletion will break references", "ja": "カスタムアトリビュート接続 — 削除で参照が切れます"},
     "preview_warn_expression":   {"en": "Expression reference — deletion may cause script errors", "ja": "エクスプレッション参照 — 削除でスクリプトエラーの可能性"},
+
+    # -- Preview risk messages: vertex_tweaks specific --
+    "preview_warn_skincluster":  {"en": "skinCluster connected — removing tweaks will destroy skin weights", "ja": "skinCluster 接続中 — Tweaks除去でスキンウェイトが消失します"},
+    "preview_warn_deformer_vtx": {"en": "Deformer connected ({types}) — removing tweaks may break deformation", "ja": "デフォーマ接続中（{types}） — Tweaks除去で変形が壊れる可能性"},
+    "preview_warn_referenced_vtx":{"en": "Referenced node — read-only, cannot be fixed", "ja": "リファレンスノード — 読み取り専用のため修正不可"},
+    "preview_warn_instance_vtx": {"en": "Instanced shape — removing tweaks will affect all instances", "ja": "インスタンス共有シェイプ — Tweaks除去が全インスタンスに波及します"},
+    "preview_warn_locked_pnts":  {"en": "Vertex offsets locked — fix cannot be applied", "ja": "頂点オフセットがロック — 修正が実行できません"},
+    "preview_warn_anim_pnts":    {"en": "Animation on vertex offsets — freeze will discard keyframes", "ja": "頂点オフセットにアニメーション接続 — フリーズでキーフレームが失われます"},
 
     # -- Risk default (shown when no specific per-node risk detected) --
     "risk_not_detected":     {"en": "No risks detected",               "ja": "リスク未検出"},
@@ -967,7 +975,10 @@ def check_vertex_tweaks(targets):
         tweaks_found = 0
         total_verts = 0
         for shape in shapes:
-            if cmds.getAttr(shape + ".intermediateObject"):
+            try:
+                if cmds.getAttr(shape + ".intermediateObject"):
+                    continue
+            except Exception:
                 continue
             try:
                 pnts_size = cmds.getAttr(shape + ".pnts", size=True)
@@ -1082,8 +1093,10 @@ def preview_transform(nodes):
 
 
 def preview_vertex_tweaks(nodes):
-    """Dry-run analysis for vertex_tweaks fix: detect blendShape connections.
+    """Dry-run analysis for vertex_tweaks fix: detect risks before pnts freeze.
 
+    Checks: skinCluster, other deformers, reference nodes, blendShape,
+    instances, locked pnts, animation on pnts.
     Returns list of {node, action, risks} dicts.
     """
     previews = []
@@ -1094,13 +1107,69 @@ def preview_vertex_tweaks(nodes):
         shapes = cmds.listRelatives(node, shapes=True, fullPath=True,
                                     type="mesh") or []
         bs_count = 0
+        skin_count = 0
+        deformer_types = set()
+        is_instance = False
+        has_locked_pnts = False
+        has_anim_pnts = False
         for shape in shapes:
-            if cmds.getAttr(shape + ".intermediateObject"):
+            try:
+                if cmds.getAttr(shape + ".intermediateObject"):
+                    continue
+            except Exception:
                 continue
-            bs_nodes = cmds.listConnections(shape, type="blendShape") or []
-            bs_count += len(set(bs_nodes))
+            # All deformers via listHistory (unified detection)
+            all_deformers = set(cmds.ls(
+                cmds.listHistory(shape) or [],
+                type="geometryFilter"))
+            for d in all_deformers:
+                nt = cmds.nodeType(d)
+                if nt == "skinCluster":
+                    skin_count += 1
+                elif nt == "blendShape":
+                    bs_count += 1
+                else:
+                    deformer_types.add(nt)
+            # Instance (multiple parents)
+            parents = cmds.listRelatives(shape, allParents=True,
+                                         fullPath=True)
+            if parents and len(parents) >= 2:
+                is_instance = True
+            # Locked pnts
+            try:
+                if cmds.getAttr(shape + ".pnts", lock=True):
+                    has_locked_pnts = True
+            except Exception:
+                pass
+            # Animation on pnts
+            anim_conns = cmds.listConnections(
+                shape + ".pnts", type="animCurve") or []
+            if anim_conns:
+                has_anim_pnts = True
+        # Reference check (node level)
+        is_referenced = False
+        try:
+            if cmds.referenceQuery(node, isNodeReferenced=True):
+                is_referenced = True
+        except Exception:
+            pass
+        # -- High risk --
+        if skin_count > 0:
+            risks.append(tr("preview_warn_skincluster"))
+        if deformer_types:
+            risks.append(tr("preview_warn_deformer_vtx",
+                            types=", ".join(sorted(deformer_types))))
+        if is_referenced:
+            risks.append(tr("preview_warn_referenced_vtx"))
         if bs_count > 0:
             risks.append(tr("preview_warn_blendshape", count=bs_count))
+        # -- Medium risk --
+        if is_instance:
+            risks.append(tr("preview_warn_instance_vtx"))
+        if has_locked_pnts:
+            risks.append(tr("preview_warn_locked_pnts"))
+        if has_anim_pnts:
+            risks.append(tr("preview_warn_anim_pnts"))
         previews.append({
             "node": node,
             "action": "Freeze pnts (polyMoveVertex + deleteHistory)",
@@ -1202,7 +1271,10 @@ def fix_vertex_tweaks(nodes):
             continue
         node_fixed = False
         for shape in shapes:
-            if cmds.getAttr(shape + ".intermediateObject"):
+            try:
+                if cmds.getAttr(shape + ".intermediateObject"):
+                    continue
+            except Exception:
                 continue
             try:
                 pnts_size = cmds.getAttr(shape + ".pnts", size=True)
