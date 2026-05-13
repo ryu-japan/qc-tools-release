@@ -25,8 +25,8 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.7.1"
-__RELEASE_DATE__ = "2026-04-07"
+__VERSION__ = "0.7.2"
+__RELEASE_DATE__ = "2026-05-13"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
@@ -142,8 +142,8 @@ except ImportError:
 
 
 MANIFEST_URL = (
-    "https://raw.githubusercontent.com/"
-    "ryu-japan/qc-tools-release/main/manifest.json")
+    "https://gitlab2.dworks-ent.net/"
+    "art-tools/maya/qc-tools/-/raw/main/manifest.json")
 _BACKUP_SUFFIX = ".bak"
 _PLUGIN_EXT = ".py"
 
