@@ -25,8 +25,8 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.7.3"
-__RELEASE_DATE__ = "2026-05-14"
+__VERSION__ = "0.7.5"
+__RELEASE_DATE__ = "2026-05-15"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
@@ -76,11 +76,16 @@ _TOOLS = [
      "group": "other",
      "command": lambda: __import__("DoraSkinWeightToolsPy").launch(),
      "window_names": [], "updatable": False},
+    {"label_key": "tool_dw_collision_check",
+     "enabled": True,
+     "group": "other",
+     "command": lambda: __import__("DW_CollisionCheck").show(),
+     "window_names": [], "updatable": False},
 ]
 # --- [010] strings ---------------------------------------------------------
 
 _TR = {
-    "tool_model_qc":     "Model QC Tools",
+    "tool_model_qc":     "Model QC Tools (Not Ready)",
     "tool_uv_qc":        "UV QC Tools",
     "tool_scene_cleanup": "Scene Cleanup Tools",
     "coming_soon":       "* Coming Soon",
@@ -109,6 +114,7 @@ _TR = {
     "group_qc_tools":         "QC Tools",
     "group_other":            "Other",
     "tool_dora_skin":         "DoraSkinWeightToolsPy",
+    "tool_dw_collision_check": "DW_CollisionCheck",
 }
 
 
