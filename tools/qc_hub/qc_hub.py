@@ -25,8 +25,8 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.7.5"
-__RELEASE_DATE__ = "2026-05-15"
+__VERSION__ = "0.7.6"
+__RELEASE_DATE__ = "2026-05-18"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
@@ -84,8 +84,13 @@ _TOOLS = [
 ]
 # --- [010] strings ---------------------------------------------------------
 
+# tool_model_qc のラベルは QLabel の AutoText で HTML として描画される。
+# 開発中（Not Ready）であることを示すオレンジ色の WIP バッジを表示するため
+# インライン <span> を使用している。他のラベル変更時はプレーンテキストでよい。
+# ⚠ の直後の ︎ は Variation Selector-15（テキスト字形を要求）。
+# 絵文字スタイルとテキストのベースライン不一致を抑えるため付与している。
 _TR = {
-    "tool_model_qc":     "Model QC Tools (Not Ready)",
+    "tool_model_qc":     "Model QC Tools <span style=\"color:#ff9800;\">⚠︎ WIP</span>",
     "tool_uv_qc":        "UV QC Tools",
     "tool_scene_cleanup": "Scene Cleanup Tools",
     "coming_soon":       "* Coming Soon",
