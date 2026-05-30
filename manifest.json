@@ -18,10 +18,10 @@
     "released_at": "2026-04-06T05:37:33Z"
   },
   "uv_qc_tools": {
-    "version": "1.7.12",
+    "version": "1.7.13",
     "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/uv_qc_tools/uv_qc_tools.py",
-    "sha256": "c0be85293c99689be64bcf1c896a1aa7a4cc9cac91108a0af643e9d420a56f97",
-    "released_at": "2026-04-06T05:37:38Z"
+    "sha256": "7f30a2a157366cc380095d66e6240635db7abc8c2129cd05827c1169460223e0",
+    "released_at": "2026-05-30T16:50:48Z"
   },
   "scene_cleanup_tools": {
     "version": "0.32.2",

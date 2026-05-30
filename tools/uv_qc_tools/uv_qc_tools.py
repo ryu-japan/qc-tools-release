@@ -7,8 +7,8 @@ Maya 2018 (Python 2.7) / Maya 2023 (Python 3) / Maya 2025 (Python 3) 対応版�
 """
 from __future__ import print_function, division, unicode_literals
 
-__VERSION__ = "1.7.12"
-__RELEASE_DATE__ = "2026-04-06"
+__VERSION__ = "1.7.13"
+__RELEASE_DATE__ = "2026-05-30"
 _VERSION = __VERSION__
 
 try:
@@ -367,7 +367,6 @@ _QSS = (
 _TR = {
     "no_mesh": {"ja": "\u30e1\u30c3\u30b7\u30e5\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002", "en": "No mesh selected."},
     "edge_result": {"ja": "\u30c1\u30a7\u30c3\u30af\u5b8c\u4e86: {count} \u4ef6\u306e\u30a8\u30c3\u30b8\u30a8\u30e9\u30fc", "en": "Check complete: {count} edge error(s)"},
-    "shell_result": {"ja": "\u30c1\u30a7\u30c3\u30af\u5b8c\u4e86: {count} \u4ef6\u306e\u30b7\u30a7\u30eb\u8ddd\u96e2\u30a8\u30e9\u30fc", "en": "Check complete: {count} shell distance error(s)"},
     "ovlp_result": {"ja": "\u91cd\u8907: {error}\u4ef6\uff08{error_groups}\u30b0\u30eb\u30fc\u30d7\uff09\u306e\u8981\u78ba\u8a8d, {intentional}\u4ef6\uff08{int_groups}\u30b0\u30eb\u30fc\u30d7\uff09\u306e\u610f\u56f3\u7684\u63a8\u5b9a", "en": "Overlaps: {error} issue(s) ({error_groups} group(s)) to review, {intentional} issue(s) ({int_groups} group(s)) likely intentional"},
 
     "no_errors": {"ja": "\u30a8\u30e9\u30fc\u306a\u3057 \u2714", "en": "No errors \u2714"},
@@ -388,11 +387,9 @@ _TR = {
     "deselect_all": {"ja": "\u3059\u3079\u3066\u89e3\u9664", "en": "Deselect All"},
     "edge_horizontal": {"ja": "\u6c34\u5e73", "en": "H"},
     "edge_vertical": {"ja": "\u5782\u76f4", "en": "V"},
-    "shell_dist": {"ja": "\u30b7\u30a7\u30eb\u8ddd\u96e2", "en": "Shell Distance"},
     "ignore_under": {"ja": "\u7121\u8996\u3059\u308b\u8ddd\u96e2 (px):", "en": "Ignore under (px):"},
     "ignore_unlock": {"ja": "\u624b\u52d5\u8abf\u6574", "en": "Manual adjust"},
     "error_under": {"ja": "\u30a8\u30e9\u30fc\u8ddd\u96e2 (px):", "en": "Error under (px):"},
-    "btn_shell": {"ja": "\u30b7\u30a7\u30eb\u8ddd\u96e2\u30c1\u30a7\u30c3\u30af", "en": "Check Shell Distance"},
     "uv_overlap": {"ja": "UV\u91cd\u8907", "en": "UV Overlap"},
     "self_overlap": {"ja": "\u540c\u4e00\u30b7\u30a7\u30eb\u5185\u306e\u91cd\u8907\u3082\u542b\u3081\u308b", "en": "Include self-overlap (same shell)"},
     "btn_overlap": {"ja": "UV\u91cd\u8907\u30c1\u30a7\u30c3\u30af", "en": "Check UV Overlap"},
@@ -422,9 +419,6 @@ _TR = {
     "cancelled": {"ja": "\u30ad\u30e3\u30f3\u30bb\u30eb\u3057\u307e\u3057\u305f", "en": "Cancelled"},
     "progress_pixel_scan": {"ja": "Pixel Edge: \u30a8\u30c3\u30b8\u8d70\u67fb\u4e2d\u2026 {current}/{total}", "en": "Pixel Edge: Scanning edges\u2026 {current}/{total}"},
     "progress_pixel_group": {"ja": "Pixel Edge: \u30b0\u30eb\u30fc\u30d7\u5316\u4e2d\u2026", "en": "Pixel Edge: Grouping\u2026"},
-    "progress_shell_raster": {"ja": "Shell Distance: \u30e9\u30b9\u30bf\u30e9\u30a4\u30ba\u4e2d\u2026 {current}/{total}", "en": "Shell Distance: Rasterizing\u2026 {current}/{total}"},
-    "progress_shell_bfs": {"ja": "Shell Distance: BFS\u8ddd\u96e2\u30de\u30c3\u30d7\u69cb\u7bc9\u4e2d\u2026 {current}/{total}", "en": "Shell Distance: Building distance maps\u2026 {current}/{total}"},
-    "progress_shell_pair": {"ja": "Shell Distance: \u30da\u30a2\u5224\u5b9a\u4e2d\u2026 {current}/{total}", "en": "Shell Distance: Checking pairs\u2026 {current}/{total}"},
     "progress_ovlp_lowres": {"ja": "UV Overlap: \u4f4e\u89e3\u50cf\u5ea6\u30b9\u30ad\u30e3\u30f3\u4e2d\u2026", "en": "UV Overlap: Low-res scan\u2026"},
     "progress_ovlp_hires": {"ja": "UV Overlap: \u9ad8\u89e3\u50cf\u5ea6\u691c\u8a3c\u4e2d\u2026", "en": "UV Overlap: Hi-res verify\u2026"},
     "done_with_time": {"ja": "\u2713 {name} \u5b8c\u4e86 ({time}s)", "en": "\u2713 {name} done ({time}s)"},
@@ -1470,7 +1464,7 @@ def _group_edge_errors(errors, res_x, res_y):
     return groups
 # --- [110] uv_padding ---
 # depends on: [000] header, [010] i18n, [020] utils (_rasterize_shell_edges, _build_distance_map, _pair_distance_from_map, _filter_uvs_by_proximity, get_selected_meshes, get_mesh_fn)
-# === Shell Distance & UV Padding ===
+# === UV Padding ===
 # --- v38 (pre-1.0): Fast Mode calculation ---
 def calc_fast_params(res_x, res_y, shell_padding, tile_padding):
     """Compute reduced resolution and padding for fast mode.
@@ -1530,75 +1524,6 @@ def collect_shell_data(res_x, res_y):
                      idx_a, idx_b))
             uv_offset += count
     return all_shell_edges
-
-def compute_shell_distance(all_shell_edges, ignore_under, error_under, progress_cb=None, cancel_check=None):
-    """Compute minimum Chebyshev distances between all shell pairs.
-
-    Returns (errors, summary_string). Errors are shell pairs closer
-    than error_under pixels but not below ignore_under.
-    """
-    if not all_shell_edges: return [], tr("shell_result", count=0)
-    all_pixels = {}; all_ptu = {}; all_uv_coords = {}; all_bboxes = {}
-    shell_keys_list = list(all_shell_edges.keys()); total_shells = len(shell_keys_list)
-    for si, key in enumerate(shell_keys_list):
-        if cancel_check and cancel_check(): return [], tr("cancelled")
-        if progress_cb: progress_cb(si, total_shells * 3, tr("progress_shell_raster", current=si + 1, total=total_shells))
-        edges = all_shell_edges[key]
-        px_set, ptu, uvc = _rasterize_shell_edges(edges)
-        all_pixels[key] = px_set; all_ptu[key] = ptu; all_uv_coords[key] = uvc
-        if px_set:
-            xs = [p[0] for p in px_set]; ys = [p[1] for p in px_set]
-            all_bboxes[key] = (min(xs), min(ys), max(xs), max(ys))
-    int_err = int(math.ceil(error_under)); _floor = math.floor
-    cell_size = max(int_err * 2, 1); grid = defaultdict(set)
-    for key in shell_keys_list:
-        if key not in all_bboxes: continue
-        bx0, by0, bx1, by1 = all_bboxes[key]
-        cx0 = int(_floor(bx0 / cell_size)); cy0 = int(_floor(by0 / cell_size))
-        cx1 = int(_floor(bx1 / cell_size)); cy1 = int(_floor(by1 / cell_size))
-        for cx in range(cx0, cx1 + 1):
-            for cy in range(cy0, cy1 + 1): grid[(cx, cy)].add(key)
-    candidate_pairs = set()
-    for cell_keys in grid.values():
-        cell_list = list(cell_keys)
-        for ii in range(len(cell_list)):
-            for jj in range(ii + 1, len(cell_list)):
-                ka, kb = cell_list[ii], cell_list[jj]
-                candidate_pairs.add((ka, kb) if ka < kb else (kb, ka))
-    needed_shells = set()
-    for ka, kb in candidate_pairs: needed_shells.add(ka); needed_shells.add(kb)
-    dist_maps = {}; needed_list = [k for k in shell_keys_list if k in needed_shells]
-    for si, key in enumerate(needed_list):
-        if cancel_check and cancel_check(): return [], tr("cancelled")
-        if progress_cb: progress_cb(total_shells + si, total_shells + len(needed_list) + len(candidate_pairs), tr("progress_shell_bfs", current=si + 1, total=len(needed_list)))
-        if key in all_bboxes and all_pixels[key]: dist_maps[key] = _build_distance_map(all_pixels[key], int_err)
-    errors = []; pair_count = 0; total_pairs = len(candidate_pairs); report_interval = max(1, total_pairs // 50)
-    for key_i, key_j in candidate_pairs:
-        pair_count += 1
-        if cancel_check and cancel_check(): return errors, tr("cancelled")
-        if progress_cb and pair_count % report_interval == 0:
-            progress_cb(total_shells + len(needed_list) + pair_count, total_shells + len(needed_list) + total_pairs, tr("progress_shell_pair", current=pair_count, total=total_pairs))
-        if key_i not in all_bboxes or key_j not in all_bboxes: continue
-        bb_i, bb_j = all_bboxes[key_i], all_bboxes[key_j]
-        bb_dx = max(0, max(bb_i[0] - bb_j[2], bb_j[0] - bb_i[2]))
-        bb_dy = max(0, max(bb_i[1] - bb_j[3], bb_j[1] - bb_i[3]))
-        if max(bb_dx, bb_dy) >= int_err: continue
-        px_i = all_pixels[key_i]; px_j = all_pixels[key_j]
-        if len(px_j) <= len(px_i):
-            dm = dist_maps.get(key_i)
-            if dm is None: continue
-            dist, close_i, close_j = _pair_distance_from_map(dm, px_i, px_j, all_ptu[key_i], all_ptu[key_j], int_err, all_uv_coords.get(key_i), all_uv_coords.get(key_j))
-        else:
-            dm = dist_maps.get(key_j)
-            if dm is None: continue
-            dist, close_j, close_i = _pair_distance_from_map(dm, px_j, px_i, all_ptu[key_j], all_ptu[key_i], int_err, all_uv_coords.get(key_j), all_uv_coords.get(key_i))
-        if dist < ignore_under or dist >= int_err: continue
-        mesh_i, sid_i = key_i; mesh_j, sid_j = key_j
-        short_i = mesh_i.rsplit("|", 1)[-1]; short_j = mesh_j.rsplit("|", 1)[-1]
-        label = ("{0} (Shell {1} <-> Shell {2})".format(short_i, sid_i, sid_j) if mesh_i == mesh_j
-                else "{0} Shell {1} <-> {2} Shell {3}".format(short_i, sid_i, short_j, sid_j))
-        errors.append({"component": label, "distance": dist, "type": "shell_distance", "shell_a": sid_i, "shell_b": sid_j, "mesh": mesh_i, "mesh_b": mesh_j, "shell_uvs_a": close_i, "shell_uvs_b": close_j})
-    return errors, tr("shell_result", count=len(errors))
 
 # === v35 (pre-1.0): UV Padding (A級 + B級 最適化) ===
 # A級: _shell_to_border_distance — タイル境界座標の逆引き化
