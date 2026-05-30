@@ -6,10 +6,10 @@
     "released_at": "2026-04-07T06:38:26Z"
   },
   "qc_hub": {
-    "version": "0.7.6",
+    "version": "0.7.7",
     "download_url": "https://raw.githubusercontent.com/ryu-japan/qc-tools-release/main/tools/qc_hub/qc_hub.py",
-    "sha256": "e8406dbba111c51ec892a1964c6a552b53e78b03e632b04c374104e1825e21b1",
-    "released_at": "2026-05-18T04:51:12Z"
+    "sha256": "ee9a5d88436aa8501adc4f579369c7fd542c4c076bfa5e0a9b9deab62b8f7c42",
+    "released_at": "2026-05-30T08:34:00Z"
   },
   "model_qc_tools": {
     "version": "0.4.3",

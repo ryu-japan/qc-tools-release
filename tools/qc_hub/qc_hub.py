@@ -25,8 +25,8 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.7.6"
-__RELEASE_DATE__ = "2026-05-18"
+__VERSION__ = "0.7.7"
+__RELEASE_DATE__ = "2026-05-30"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
