@@ -5,6 +5,8 @@ Maya 2018 / 2023 / 2025 (Python 2.7 / 3, PySide2 / PySide6) compatible
 """
 from __future__ import print_function, division, unicode_literals
 
+import webbrowser
+
 from maya import cmds
 
 try:
@@ -25,8 +27,8 @@ def get_maya_main_window():
     return None
 
 
-__VERSION__ = "0.7.7"
-__RELEASE_DATE__ = "2026-05-30"
+__VERSION__ = "0.7.8"
+__RELEASE_DATE__ = "2026-06-01"
 
 WINDOW_TITLE = "QC Hub"
 WINDOW_OBJECT_NAME = "qcHubWindow"
@@ -45,6 +47,8 @@ _TOOL_GROUPS = [
 #   version_attr, window_names, group,
 #   show_button (optional, default True),
 #   command (optional callable — overrides module.launch()),
+#   repo_url (optional str — distribution page opened when a group="other"
+#             external tool is not installed),
 #   updatable (optional bool, default True).
 # To add a new tool, append one dict here.
 _TOOLS = [
@@ -75,11 +79,13 @@ _TOOLS = [
      "enabled": True,
      "group": "other",
      "command": lambda: __import__("DoraSkinWeightToolsPy").launch(),
+     "repo_url": "https://gitlab2.dworks-ent.net/art-tools/maya/dora_skin_repo-lab",
      "window_names": [], "updatable": False},
     {"label_key": "tool_dw_collision_check",
      "enabled": True,
      "group": "other",
      "command": lambda: __import__("DW_CollisionCheck").show(),
+     "repo_url": "https://gitlab2.dworks-ent.net/art-tools/maya/dw_collisioncheck",
      "window_names": [], "updatable": False},
 ]
 # --- [010] strings ---------------------------------------------------------
@@ -112,6 +118,8 @@ _TR = {
     "tool_not_found":         "{name} is not installed. Download now?",
     "downloading":            "Downloading...",
     "not_in_manifest":        "{name} is not available for download.",
+    "repo_open_confirm":      "{name} is not installed. Open the distribution page?",
+    "repo_url_missing":       "No distribution page is set for {name}.",
     "install_ok":             "{name} installed successfully.",
     "install_fail":           "Installation failed: {error}",
     "tool_qc_plugin":         "QC Tools Plugin",
@@ -951,11 +959,27 @@ class QCHubUI(QtWidgets.QWidget):
             try:
                 cmd()
                 print(tr("launch_ok", name=display_name))
+            except ImportError:
+                # 内部 import 由来の ImportError も拾う（既存 _on_launch と同じ割り切り）
+                self._open_repo_page(tool, display_name)
             except Exception as e:
                 msg = tr("launch_fail", name=display_name)
                 cmds.warning("{0} ({1})".format(msg, e))
         else:
             self._on_launch(tool["module"], tool["label_key"])
+
+    def _open_repo_page(self, tool, display_name):
+        """Offer to open the tool's distribution page when not installed."""
+        repo_url = tool.get("repo_url")
+        if not repo_url:
+            cmds.warning(tr("repo_url_missing", name=display_name))
+            return
+        result = QtWidgets.QMessageBox.question(
+            self, WINDOW_TITLE,
+            tr("repo_open_confirm", name=display_name),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if result == QtWidgets.QMessageBox.Yes:
+            webbrowser.open(repo_url)
 
     def _on_launch(self, module_name, label_key):
         """Import and launch the target tool."""
